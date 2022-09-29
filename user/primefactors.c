@@ -13,6 +13,16 @@ primefactors(int argc, char* argv[])
         exit(1);
     }
 
+    int i = 0;
+    while(argv[1][i] != '\0') 
+    {
+        if(argv[1][i] < '0' || argv[1][i] > '9')
+        {
+            fprintf(2, "n has to be between 2 and 100\n");
+            exit(1);
+        }
+        i++;
+    }
     if(atoi(argv[1]) < 2 || atoi(argv[1]) > 100)
     {
         fprintf(2, "n has to be between 2 and 100\n");
@@ -57,12 +67,12 @@ primefactors(int argc, char* argv[])
             while(n % primes[ind] == 0)
             {
                 n /= primes[ind];
-                fprintf(2, "%d, ", primes[ind]);
+                fprintf(1, "%d, ", primes[ind]);
                 cnt++;
             }
 
             if(cnt != 0)
-            fprintf(2, "[%d]\n", getpid());
+            fprintf(1, "[%d]\n", getpid());
 
             if (write(pipefd[1], &n, 1) < 0) {
                 fprintf(2, "Error: cannot write. Aborting...\n");

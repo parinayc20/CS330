@@ -10,25 +10,49 @@ pipeline(int argc, char* argv[])
         fprintf(2, "Usage : pipeline n x\n");
         exit(1);
     }
-
+    int sign = 1;
+    int i = 0;
+    while(argv[1][i] != '\0') 
+    {
+        if(argv[1][i] < '0' || argv[1][i] > '9')
+        {
+            fprintf(2, "n must be a positive integer\n");
+            exit(1);
+        }
+        i++;
+    }
     if(atoi(argv[1]) <= 0)
     {
-        fprintf(2, "n should be a positive number\n");
+        fprintf(2, "n must be a positive integer\n");
         exit(1);
     }
 
-    //TODO: implement the good input technique
-
-    // int first_digit = argv[2][0] - '0';
-
-    if(!atoi(argv[2]) )
+    if(!((argv[2][0] >= '0' && argv[2][0] <= '9') ||  argv[2][0] == '-'))
     {
-        fprintf(2, "x should be a number\n");
+        fprintf(2, "x should be a integer\n");
         exit(1);
+    }
+    if(argv[2][0]=='-')
+    {
+        sign = -1;
+    }
+    i = 1;
+    while(argv[2][i] != '\0') 
+    {
+        if(argv[2][i] < '0' || argv[2][i] > '9')
+        {
+            fprintf(2, "x should be a integer\n");
+            exit(1);
+        }
+        i++;
     }
 
     int n = atoi(argv[1]);
-    int x = atoi(argv[2]);
+    int x;
+    if(sign==1)
+        x = atoi(argv[2]);
+    else 
+        x = -1*atoi(argv[2]+1);
     int ret_val = 0;
     int pipefd[2];
 
@@ -59,7 +83,7 @@ pipeline(int argc, char* argv[])
         }
         else {
             x += getpid();
-            fprintf(2, "%d : %d\n", getpid(), x);
+            fprintf(1, "%d : %d\n", getpid(), x);
             if (write(pipefd[1], &x, sizeof(int)) < 0) {
                 fprintf(2, "Error: cannot write. Aborting...\n");
                 exit(1);

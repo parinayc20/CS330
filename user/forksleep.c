@@ -11,13 +11,23 @@ forksleep(int argc, char* argv[])
         exit(1);
     }
 
+    int i = 0;
+    while(argv[1][i] != '\0') 
+    {
+        if(argv[1][i] < '0' || argv[1][i] > '9')
+        {
+            fprintf(2, "m must be a positive integer\n");
+            exit(1);
+        }
+        i++;
+    }
     if(atoi(argv[1]) <= 0)
     {
         fprintf(2, "m must be a positive integer\n");
         exit(1);
     }
 
-    if(atoi(argv[2]) != 0 && atoi(argv[2]) != 1)
+    if((argv[2][0] != '0' && argv[2][0] != '1') || argv[2][1] != '\0')
     {
         fprintf(2, "n must be either 0 or 1\n");
         exit(1);
