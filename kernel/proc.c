@@ -817,7 +817,7 @@ ps(void)
     if(p->parent){
       acquire(&p->parent->lock);
       ppid = p->parent->pid;
-      release(&p->parent->lock);ppid = p->parent->pid;
+      release(&p->parent->lock);
     }
     else
       ppid = -1;
