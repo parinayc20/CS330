@@ -426,6 +426,9 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
+  acquire(&tickslock);
+  p->etime = ticks;
+  release(&tickslock);
 
   release(&wait_lock);
 
@@ -570,9 +573,6 @@ scheduler(void)
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-        acquire(&tickslock);
-        p->etime = ticks;
-        release(&tickslock);
       }
       release(&p->lock);
     }
@@ -786,8 +786,15 @@ ps(void)
   uint etime = 0;
 
   for(p = proc; p < &proc[NPROC]; p++){
+
+    acquire(&p->lock);
+
     if(p->state == UNUSED)
+    {
+      release(&p->lock);
       continue;
+    }
+
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
     {
       state = states[p->state];
@@ -806,14 +813,20 @@ ps(void)
     else
       state = "???";
 
+    acquire(&wait_lock);
     if(p->parent){
+      acquire(&p->parent->lock);
       ppid = p->parent->pid;
+      release(&p->parent->lock);ppid = p->parent->pid;
     }
     else
       ppid = -1;
+    release(&wait_lock);
 
     printf("pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p", p->pid, ppid, state, p->name, p->ctime, p->stime, etime, p->sz);
     printf("\n");
+
+    release(&p->lock);
   }
 }
 
@@ -837,11 +850,15 @@ pinfo(int pid, uint64 addr)
     pid = mp->pid;
 
   for(p = proc; p < &proc[NPROC]; p++){
-    if(p->pid == pid){
-      struct procstat pstat;
 
-      if(p->state == UNUSED)
-      continue;
+    acquire(&p->lock);
+    if(p->pid == pid){
+
+      if(p->state == UNUSED){
+        release(&p->lock);
+        continue;
+      }
+
       if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
       {
         state = states[p->state];
@@ -860,11 +877,17 @@ pinfo(int pid, uint64 addr)
       else
         state = "???";
 
+      acquire(&wait_lock);
       if(p->parent){
+        acquire(&p->parent->lock);
         ppid = p->parent->pid;
+        release(&p->parent->lock);
       }
       else
         ppid = -1;
+      release(&wait_lock);
+
+      struct procstat pstat;
       
       pstat.pid = p->pid;
       pstat.ppid = ppid;
@@ -875,13 +898,16 @@ pinfo(int pid, uint64 addr)
       strncpy(pstat.state, state, 8);
       strncpy(pstat.command, p->name, 16);
 
-      if(addr != 0 && copyout_pinfo(p->pagetable, addr, (struct procstat *)&pstat, sizeof(struct procstat)) < 0)
+      release(&p->lock);
+
+      if(addr == 0 || copyout(mp->pagetable, addr, (char *)&pstat, sizeof(struct procstat)) < 0)
       {
         return -1;
       }
 
       return 0;
     }
+    release(&p->lock);
   }
 
   return -1;
