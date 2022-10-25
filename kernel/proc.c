@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "procstat.h"
+#include "param.h"
 
 struct cpu cpus[NCPU];
 
@@ -105,6 +107,7 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
+  uint xticks;
 
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -119,12 +122,14 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
-  acquire(&tickslock);
-  p->ctime = ticks;
-  release(&tickslock);
-  p->stime = -1;
-  p->etime = -1;
+  p->priority = -1000000;
+  p->next_burst_len = 0;
+  p->batch_process = 0;
+  p->cpu_usage = 0;
+  p->prev_cpu_usage = 0;
+  p->wait_time = 0;
+  p->wait_st_time = -1;
+  p->prev_burst_start = -1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -146,6 +151,14 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  acquire(&tickslock);
+  xticks = ticks;
+  release(&tickslock);
+
+  p->ctime = xticks;
+  p->stime = -1;
+  p->endtime = -1;
 
   return p;
 }
@@ -250,6 +263,15 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+  int cticks;
+  if (!holding(&tickslock)) {
+    acquire(&tickslock);
+    cticks = ticks;
+    release(&tickslock);
+  }
+  else cticks = ticks;
+  p->wait_st_time = cticks;
+
   release(&p->lock);
 }
 
@@ -319,13 +341,23 @@ fork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+
+  int cticks;
+  if (!holding(&tickslock)) {
+    acquire(&tickslock);
+    cticks = ticks;
+    release(&tickslock);
+  }
+  else cticks = ticks;
+  np->wait_st_time = cticks;
+
   release(&np->lock);
 
   return pid;
 }
 
 int
-forkf(uint64 func_addr)
+forkp(int priority)
 {
   int i, pid;
   struct proc *np;
@@ -349,7 +381,70 @@ forkf(uint64 func_addr)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
-  np->trapframe->epc = func_addr;
+
+  // increment reference counts on open file descriptors.
+  for(i = 0; i < NOFILE; i++)
+    if(p->ofile[i])
+      np->ofile[i] = filedup(p->ofile[i]);
+  np->cwd = idup(p->cwd);
+
+  safestrcpy(np->name, p->name, sizeof(p->name));
+
+  pid = np->pid;
+  np->priority = priority;
+  np->batch_process = 1;
+  mycpu()->nump += 1;
+
+  release(&np->lock);
+
+  acquire(&wait_lock);
+  np->parent = p;
+  release(&wait_lock);
+
+  acquire(&np->lock);
+  np->state = RUNNABLE;
+
+  int cticks;
+  if (!holding(&tickslock)) {
+    acquire(&tickslock);
+    cticks = ticks;
+    release(&tickslock);
+  }
+  else cticks = ticks;
+  np->wait_st_time = cticks;
+
+  release(&np->lock);
+
+  return pid;
+}
+
+int
+forkf(uint64 faddr)
+{
+  int i, pid;
+  struct proc *np;
+  struct proc *p = myproc();
+
+  // Allocate process.
+  if((np = allocproc()) == 0){
+    return -1;
+  }
+
+  // Copy user memory from parent to child.
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+  np->sz = p->sz;
+
+  // copy saved user registers.
+  *(np->trapframe) = *(p->trapframe);
+
+  // Cause fork to return 0 in the child.
+  np->trapframe->a0 = 0;
+  // Make child to jump to function
+  np->trapframe->epc = faddr;
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -369,6 +464,16 @@ forkf(uint64 func_addr)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+
+  int cticks;
+  if (!holding(&tickslock)) {
+    acquire(&tickslock);
+    cticks = ticks;
+    release(&tickslock);
+  }
+  else cticks = ticks;
+  np->wait_st_time = cticks;
+
   release(&np->lock);
 
   return pid;
@@ -396,6 +501,7 @@ void
 exit(int status)
 {
   struct proc *p = myproc();
+  int xticks;
 
   if(p == initproc)
     panic("init exiting");
@@ -426,11 +532,71 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-  acquire(&tickslock);
-  p->etime = ticks;
-  release(&tickslock);
 
   release(&wait_lock);
+
+  acquire(&tickslock);
+  xticks = ticks;
+  release(&tickslock);
+
+  p->endtime = xticks;
+
+  struct cpu *c = mycpu();
+  if(p->batch_process)
+  {
+    c->comp += 1;
+    c->tatime += (p->endtime - p->ctime);
+    c->wtime += p->wait_time + (p->endtime - p->wait_st_time);
+    c->ctime += p->endtime;
+    c->max_ctime = c->max_ctime < p->endtime ? p->endtime : c->ctime;
+    c->min_ctime = c->min_ctime > p->endtime ? p->endtime : c->ctime;
+    if(c->sched_policy == 1) {
+      int t = p->endtime - p->prev_burst_start;
+      int err = t - p->next_burst_len;
+      err = err > 0 ? err : (0-err);
+      if(t != 0) {
+        c->nbursts += 1;
+        c->max_blen = c->max_blen < t ? t : c->max_blen;
+        c->tblen += t;
+        c->min_blen = c->min_blen > t ? t : c->min_blen;
+      }
+      if(err != 0) {
+        c->ebursts += 1;
+        c->tebursts += err;
+      }
+    }
+  }
+
+  if(c->comp && c->comp == c->nump) {
+    printf("Batch execution time: %d\n", (xticks - c->stime));
+    printf("Average turn-around time: %d\n", c->tatime / c->nump);
+    printf("Average waiting time: %d\n", c->wtime / c->nump);
+    printf("Completion time: avg: %d, max: %d, min: %d\n", c->ctime / c->nump, c->max_ctime, c->min_ctime);
+    c->comp = 0;
+    c->nump = 0;
+    c->stime = -1;
+    c->tatime = 0;
+    c->wtime = 0;
+    c->ctime = 0;
+    c->max_ctime = 0;
+    c->min_ctime = 1000000000;
+
+    if(c->sched_policy == 1) {
+      printf("CPU bursts: count: %d, avg: %d, max: %d, min: %d\n", c->nbursts, c->tblen / c->nbursts, c->max_blen, c->min_blen);
+      printf("CPU burst estimates: count: %d, avg: %d, max: %d, min: %d\n", c->nebursts, c->teblen / c->nebursts, c->max_belen, c->min_belen);
+      printf("CPU burst estimation error: count: %d, avg: %d\n", c->ebursts, c->ebursts / c->tebursts);
+      c->nbursts = 0;
+      c->tblen = 0;
+      c->max_blen = 0;
+      c->min_blen = 1000000000;
+      c->nebursts = 0;
+      c->teblen = 0;
+      c->max_belen = 0;
+      c->min_belen = 1000000000;
+      c->ebursts = 0;
+      c->tebursts = 0;
+    }
+  }
 
   // Jump into the scheduler, never to return.
   sched();
@@ -487,51 +653,45 @@ wait(uint64 addr)
 }
 
 int
-waitpid(int ch_pid, uint64 addr)
+waitpid(int pid, uint64 addr)
 {
   struct proc *np;
-  int haskid, pid;
   struct proc *p = myproc();
-  int child_pid = ch_pid;
+  int found=0;
 
   acquire(&wait_lock);
 
   for(;;){
-    // Scan through table looking for exited children.
-    haskid = 0;
+    // Scan through table looking for child with pid
     for(np = proc; np < &proc[NPROC]; np++){
-      if(ch_pid == -1){
-        child_pid = np->pid;
-      }
-      if(np->parent == p && np->pid == child_pid){
+      if((np->parent == p) && (np->pid == pid)){
+	found = 1;
         // make sure the child isn't still in exit() or swtch().
         acquire(&np->lock);
 
-        haskid = 1;
         if(np->state == ZOMBIE){
-          // Found
-          pid = np->pid;
-          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
+           if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
                                   sizeof(np->xstate)) < 0) {
-            release(&np->lock);
-            release(&wait_lock);
-            return -1;
-          }
-          freeproc(np);
-          release(&np->lock);
-          release(&wait_lock);
-          return pid;
-        }
+             release(&np->lock);
+             release(&wait_lock);
+             return -1;
+           }
+           freeproc(np);
+           release(&np->lock);
+           release(&wait_lock);
+           return pid;
+	}
+
         release(&np->lock);
       }
     }
 
     // No point waiting if we don't have any children.
-    if(!haskid || p->killed){
+    if(!found || p->killed){
       release(&wait_lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -555,26 +715,215 @@ scheduler(void)
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        if(p->stime == -1){
-          acquire(&tickslock);
-          p->stime = ticks;
-          release(&tickslock);
-        }
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    if(c->sched_policy == SCHED_NPREEMPT_FCFS || c->sched_policy == SCHED_PREEMPT_RR)
+    {
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          // Switch to chosen process.  It is the process's job
+          // to release its lock and then reacquire it
+          // before jumping back to us.
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
+          // Process is done running for now.
+          // It should have changed its p->state before coming back.
+          c->proc = 0;
+        }
+        release(&p->lock);
+
+        if(c->sched_policy != SCHED_NPREEMPT_FCFS && c->sched_policy != SCHED_PREEMPT_RR)
+          break;
       }
-      release(&p->lock);
+    }
+
+    else
+    if (c->sched_policy == SCHED_NPREEMPT_SJF)
+    {
+      int min_burst_len = -1;
+      struct proc *p_to_sched = 0;
+      int flag = 0;
+
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          if(p->batch_process == 0){
+            p->state = RUNNING;
+            c->proc = p;
+            swtch(&c->context, &p->context);
+
+            c->proc = 0;
+            release(&p->lock);
+            break;
+          }
+
+          else {
+            if(min_burst_len == -1){
+              min_burst_len = p->next_burst_len;
+              p_to_sched = p;
+            }
+            else
+            if(min_burst_len > p->next_burst_len) {
+              min_burst_len = p->next_burst_len;
+              p_to_sched = p;
+            }
+          }
+        }
+        release(&p->lock); // ye bhi check karna am I doing it correctly
+
+        if(c->sched_policy != SCHED_NPREEMPT_SJF)
+        {
+          flag = 1;
+          break;
+        }
+      }
+      if(flag)
+        continue;
+
+      acquire(&p_to_sched->lock);
+      p_to_sched->state = RUNNING;
+      c->proc = p_to_sched;
+
+      int sticks;
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        sticks = ticks;
+        release(&tickslock);
+      }
+      else sticks = ticks;
+
+      p_to_sched->prev_burst_start = sticks;
+
+      swtch(&c->context, &p_to_sched->context);
+
+      int eticks;
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        eticks = ticks;
+        release(&tickslock);
+      }
+      else eticks = ticks;
+      
+      int t = eticks - sticks;
+      int err = t - p_to_sched->next_burst_len;
+      err = err > 0 ? err : (0-err);
+      if(err > 0 && p_to_sched->state != ZOMBIE) {
+        c->tebursts += err;
+        c->ebursts += 1;
+      }
+
+      p_to_sched->next_burst_len = t - (SCHED_PARAM_SJF_A_NUMER * t) / SCHED_PARAM_SJF_A_DENOM + 
+                              (SCHED_PARAM_SJF_A_NUMER * p_to_sched->next_burst_len) / SCHED_PARAM_SJF_A_DENOM;
+
+      if(t != 0 && p_to_sched->state != ZOMBIE) {
+        c->nbursts += 1;
+        c->max_blen = c->max_blen < t ? t : c->max_blen;
+        c->tblen += t;
+        c->min_blen = c->min_blen > t ? t : c->min_blen;
+      }
+
+      if(p_to_sched->next_burst_len != 0 && p_to_sched->state != ZOMBIE) {
+        t = p_to_sched->next_burst_len;
+        c->nebursts += 1;
+        c->max_belen = c->max_belen < t ? t : c->max_belen;
+        c->teblen += t;
+        c->min_belen = c->min_belen > t ? t : c->min_belen;
+      }
+
+      c->proc = 0;
+      release(&p_to_sched->lock);
+    }
+
+    else
+    if (c->sched_policy == SCHED_PREEMPT_UNIX) {
+      int min_priority = -1;
+      int min_wait_time = -1;
+      struct proc *p_to_sched = 0;
+      int flag = 0;
+
+      int curr_ticks = 0;
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        curr_ticks = ticks;
+        release(&tickslock);
+      }
+      else curr_ticks = ticks;
+
+      for(p = proc; p < &proc[NPROC]; p++) {
+        acquire(&p->lock);
+        if(p->state == RUNNABLE) {
+          if(p->batch_process == 0){
+            p->state = RUNNING;
+            c->proc = p;
+            swtch(&c->context, &p->context);
+
+            c->proc = 0;
+            release(&p->lock);
+            break;
+          }
+
+          else {
+            if(p->cpu_usage != p->prev_cpu_usage) {
+              p->cpu_usage /= 2;
+              p->prev_cpu_usage = p->cpu_usage;
+            }
+
+            int priority = p->priority + (p->cpu_usage / 2);
+            int waiting_time = (curr_ticks - p->wait_st_time) + p->wait_time;
+            if(min_priority == -1) {
+              min_priority = priority;
+              p_to_sched = p;
+              min_wait_time = waiting_time;
+            }
+            else
+            if(min_priority > priority)
+            {
+              min_priority = priority;
+              p_to_sched = p;
+              min_wait_time = waiting_time;
+            }
+            else
+            if(min_priority == priority && min_wait_time < waiting_time){
+              min_priority = priority;
+              p_to_sched = p;
+              min_wait_time = waiting_time;
+            }
+          }
+        }
+        release(&p->lock);
+
+        if(c->sched_policy != SCHED_PREEMPT_UNIX)
+        {
+          flag = 1;
+          break;
+        }
+      }
+
+      if(flag)
+        continue;
+
+      acquire(&p_to_sched->lock);
+
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        curr_ticks = ticks;
+        release(&tickslock);
+      }
+      else curr_ticks = ticks;
+
+      p_to_sched->wait_time += (curr_ticks - p_to_sched->wait_st_time);
+      p_to_sched->wait_st_time = -1;
+
+      p_to_sched->state = RUNNING;
+      c->proc = p_to_sched;
+      swtch(&c->context, &p_to_sched->context);
+      c->proc = 0;
+      release(&p_to_sched->lock);
+    }
+
+    else {
+      panic("Scheduling policy not found");
     }
   }
 }
@@ -613,6 +962,17 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  p->cpu_usage += SCHED_PARAM_CPU_USAGE;
+
+  int cticks;
+  if (!holding(&tickslock)) {
+    acquire(&tickslock);
+    cticks = ticks;
+    release(&tickslock);
+  }
+  else cticks = ticks;
+  p->wait_st_time = cticks;
+
   sched();
   release(&p->lock);
 }
@@ -623,9 +983,25 @@ void
 forkret(void)
 {
   static int first = 1;
+  uint xticks;
+  int first_batch = 0;
+  if(myproc()->batch_process)
+  {
+    if(mycpu()->stime == -1)
+      first_batch = 1;
+  }
 
   // Still holding p->lock from scheduler.
   release(&myproc()->lock);
+
+  acquire(&tickslock);
+  xticks = ticks;
+  release(&tickslock);
+
+  myproc()->stime = xticks;
+  if(first_batch) {
+    mycpu()->stime = xticks;
+  }
 
   if (first) {
     // File system initialization must be run in the context of a
@@ -658,6 +1034,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  p->cpu_usage += SCHED_PARAM_CPU_USAGE / 2;
 
   sched();
 
@@ -681,6 +1058,15 @@ wakeup(void *chan)
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
+
+        int cticks;
+        if (!holding(&tickslock)) {
+          acquire(&tickslock);
+          cticks = ticks;
+          release(&tickslock);
+        }
+        else cticks = ticks;
+        p->wait_st_time = cticks;
       }
       release(&p->lock);
     }
@@ -702,6 +1088,15 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
+
+        int cticks;
+        if (!holding(&tickslock)) {
+          acquire(&tickslock);
+          cticks = ticks;
+          release(&tickslock);
+        }
+        else cticks = ticks;
+        p->wait_st_time = cticks;
       }
       release(&p->lock);
       return 0;
@@ -770,145 +1165,128 @@ procdump(void)
   }
 }
 
-void
+// Print a process listing to console with proper locks held.
+// Caution: don't invoke too often; can slow down the machine.
+int
 ps(void)
 {
-  static char *states[] = {
+   static char *states[] = {
   [UNUSED]    "unused",
-  [SLEEPING]  "sleep ",
+  [SLEEPING]  "sleep",
   [RUNNABLE]  "runble",
-  [RUNNING]   "run   ",
+  [RUNNING]   "run",
   [ZOMBIE]    "zombie"
   };
   struct proc *p;
   char *state;
-  int ppid;
-  uint etime = 0;
+  int ppid, pid;
+  uint xticks;
 
+  printf("\n");
   for(p = proc; p < &proc[NPROC]; p++){
-
     acquire(&p->lock);
-
-    if(p->state == UNUSED)
-    {
+    if(p->state == UNUSED) {
       release(&p->lock);
       continue;
     }
-
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
-    {
       state = states[p->state];
-      if(p->state == ZOMBIE)
-        etime = p->etime - p->stime;
-      else
-      if(p->stime == -1)
-        etime = 0;
-      else
-      {
-        acquire(&tickslock);
-        etime = ticks - p->stime;
-        release(&tickslock);
-      }
-    }
     else
       state = "???";
 
+    pid = p->pid;
+    release(&p->lock);
     acquire(&wait_lock);
-    if(p->parent){
-      acquire(&p->parent->lock);
-      ppid = p->parent->pid;
-      release(&p->parent->lock);
+    if (p->parent) {
+       acquire(&p->parent->lock);
+       ppid = p->parent->pid;
+       release(&p->parent->lock);
     }
-    else
-      ppid = -1;
+    else ppid = -1;
     release(&wait_lock);
 
-    printf("pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p", p->pid, ppid, state, p->name, p->ctime, p->stime, etime, p->sz);
-    printf("\n");
+    acquire(&tickslock);
+    xticks = ticks;
+    release(&tickslock);
 
-    release(&p->lock);
+    printf("pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p", pid, ppid, state, p->name, p->ctime, p->stime, (p->endtime == -1) ? xticks-p->stime : p->endtime-p->stime, p->sz);
+    printf("\n");
   }
+  return 0;
 }
 
 int
 pinfo(int pid, uint64 addr)
 {
-  static char *states[] = {
+   struct procstat pstat;
+
+   static char *states[] = {
   [UNUSED]    "unused",
-  [SLEEPING]  "sleep ",
+  [SLEEPING]  "sleep",
   [RUNNABLE]  "runble",
-  [RUNNING]   "run   ",
+  [RUNNING]   "run",
   [ZOMBIE]    "zombie"
   };
   struct proc *p;
-  struct proc *mp = myproc();
   char *state;
-  int ppid;
-  uint etime = 0;
+  uint xticks;
+  int found=0;
 
-  if(pid == -1)
-    pid = mp->pid;
-
-  for(p = proc; p < &proc[NPROC]; p++){
-
-    acquire(&p->lock);
-    if(p->pid == pid){
-
-      if(p->state == UNUSED){
-        release(&p->lock);
-        continue;
-      }
-
-      if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
-      {
-        state = states[p->state];
-        if(p->state == ZOMBIE)
-          etime = p->etime - p->stime;
-        else
-        if(p->stime == -1)
-          etime = 0;
-        else
-        {
-          acquire(&tickslock);
-          etime = ticks - p->stime;
-          release(&tickslock);
-        }
-      }
-      else
-        state = "???";
-
-      acquire(&wait_lock);
-      if(p->parent){
-        acquire(&p->parent->lock);
-        ppid = p->parent->pid;
-        release(&p->parent->lock);
-      }
-      else
-        ppid = -1;
-      release(&wait_lock);
-
-      struct procstat pstat;
-      
-      pstat.pid = p->pid;
-      pstat.ppid = ppid;
-      pstat.ctime = p->ctime;
-      pstat.stime = p->stime;
-      pstat.etime = etime;
-      pstat.size = p->sz;
-      strncpy(pstat.state, state, 8);
-      strncpy(pstat.command, p->name, 16);
-
-      release(&p->lock);
-
-      if(addr == 0 || copyout(mp->pagetable, addr, (char *)&pstat, sizeof(struct procstat)) < 0)
-      {
-        return -1;
-      }
-
-      return 0;
-    }
-    release(&p->lock);
+  if (pid == -1) {
+     p = myproc();
+     acquire(&p->lock);
+     found=1;
   }
+  else {
+     for(p = proc; p < &proc[NPROC]; p++){
+       acquire(&p->lock);
+       if((p->state == UNUSED) || (p->pid != pid)) {
+         release(&p->lock);
+         continue;
+       }
+       else {
+         found=1;
+         break;
+       }
+     }
+  }
+  if (found) {
+     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+         state = states[p->state];
+     else
+         state = "???";
 
-  return -1;
+     pstat.pid = p->pid;
+     release(&p->lock);
+     acquire(&wait_lock);
+     if (p->parent) {
+        acquire(&p->parent->lock);
+        pstat.ppid = p->parent->pid;
+        release(&p->parent->lock);
+     }
+     else pstat.ppid = -1;
+     release(&wait_lock);
+
+     acquire(&tickslock);
+     xticks = ticks;
+     release(&tickslock);
+
+     safestrcpy(&pstat.state[0], state, strlen(state)+1);
+     safestrcpy(&pstat.command[0], &p->name[0], sizeof(p->name));
+     pstat.ctime = p->ctime;
+     pstat.stime = p->stime;
+     pstat.etime = (p->endtime == -1) ? xticks-p->stime : p->endtime-p->stime;
+     pstat.size = p->sz;
+     if(copyout(myproc()->pagetable, addr, (char *)&pstat, sizeof(pstat)) < 0) return -1;
+     return 0;
+  }
+  else return -1;
+}
+
+int schedpolicy(int policy)
+{
+  struct cpu *c = mycpu();
+  int prev_policy = c -> sched_policy;
+  c -> sched_policy = policy;
+  return prev_policy;
 }

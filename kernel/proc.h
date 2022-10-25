@@ -24,6 +24,27 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
+  int sched_policy;           // Scheduling policy
+
+  // batch statistics
+  int nump;
+  int comp;
+  int stime;
+  int tatime;
+  int wtime;
+  int ctime;
+  int max_ctime;
+  int min_ctime;
+  int nbursts;
+  int max_blen;
+  int min_blen;
+  int tblen;
+  int nebursts;
+  int max_belen;
+  int min_belen;
+  int teblen;
+  int ebursts;
+  int tebursts;
 };
 
 extern struct cpu cpus[NCPU];
@@ -88,10 +109,21 @@ struct proc {
 
   // p->lock must be held when using these:
   enum procstate state;        // Process state
-  void *chan;                    // If non-zero, sleeping on chan
+  void *chan;                  // If non-zero, sleeping on chan
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int priority;
+  int next_burst_len;
+
+  int batch_process;
+  int cpu_usage;
+  int prev_cpu_usage;
+
+  int wait_time;
+  int wait_st_time;
+
+  int prev_burst_start;
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -104,9 +136,9 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)sleep(1);
+  char name[16];               // Process name (debugging)
 
-  uint ctime;
-  uint stime;
-  uint etime;
+  int ctime;		       // Creation time
+  int stime;		       // Execution start time
+  int endtime;		       // Execution end time
 };

@@ -1,5 +1,3 @@
-#include "procstat.h"
-
 struct buf;
 struct context;
 struct file;
@@ -87,7 +85,6 @@ void            printfinit(void);
 int             cpuid(void);
 void            exit(int);
 int             fork(void);
-int             forkf(uint64);
 int             growproc(int);
 void            proc_mapstacks(pagetable_t);
 pagetable_t     proc_pagetable(struct proc *);
@@ -102,14 +99,17 @@ void            sched(void);
 void            sleep(void*, struct spinlock*);
 void            userinit(void);
 int             wait(uint64);
-int             waitpid(int, uint64);
 void            wakeup(void*);
 void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-void            ps(void);
-int             pinfo(int, uint64 addr);
+int		forkf(uint64);
+int		waitpid(int, uint64);
+int		ps(void);
+int		pinfo(int, uint64);
+int     forkp(int);
+int     schedpolicy(int);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

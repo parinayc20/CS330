@@ -104,6 +104,7 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+
 extern uint64 sys_getppid(void);
 extern uint64 sys_yield(void);
 extern uint64 sys_getpa(void);
@@ -111,6 +112,8 @@ extern uint64 sys_forkf(void);
 extern uint64 sys_waitpid(void);
 extern uint64 sys_ps(void);
 extern uint64 sys_pinfo(void);
+extern uint64 sys_schedpolicy(void);
+extern uint64 sys_forkp(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -134,6 +137,7 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+
 [SYS_getppid] sys_getppid,
 [SYS_yield]   sys_yield,
 [SYS_getpa]   sys_getpa,
@@ -141,6 +145,8 @@ static uint64 (*syscalls[])(void) = {
 [SYS_waitpid] sys_waitpid,
 [SYS_ps]      sys_ps,
 [SYS_pinfo]   sys_pinfo,
+[SYS_schedpolicy] sys_schedpolicy,
+[SYS_forkp]   sys_forkp,
 };
 
 void

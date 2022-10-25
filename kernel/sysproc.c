@@ -24,42 +24,6 @@ sys_getpid(void)
 }
 
 uint64
-sys_getppid(void)
-{
-  if(myproc()->parent)
-    return myproc()->parent->pid;
-  else
-    return -1;
-}
-
-uint64
-sys_yield(void)
-{
-  yield();
-  return 0;
-}
-
-uint64
-sys_getpa(void)
-{
-  uint64 vir_addr;
-
-  if(argaddr(0, &vir_addr) < 0)
-    return -1;
-  return walkaddr(myproc()->pagetable, vir_addr) + (vir_addr & (PGSIZE - 1));
-}
-
-uint64
-sys_forkf(void)
-{
-  uint64 f_addr;
-
-  if(argaddr(0, &f_addr) < 0)
-    return -1;
-  return forkf(f_addr);
-}
-
-uint64
 sys_fork(void)
 {
   return fork();
@@ -72,16 +36,6 @@ sys_wait(void)
   if(argaddr(0, &p) < 0)
     return -1;
   return wait(p);
-}
-
-uint64
-sys_waitpid(void)
-{
-  int pid;
-  uint64 addr;
-  if(argint(0, &pid) < 0 || argaddr(1, &addr) < 0)
-    return -1;
-  return waitpid(pid, addr);
 }
 
 uint64
@@ -143,18 +97,93 @@ sys_uptime(void)
 }
 
 uint64
+sys_getppid(void)
+{
+  if (myproc()->parent) return myproc()->parent->pid;
+  else {
+     printf("No parent found.\n");
+     return 0;
+  }
+}
+
+uint64
+sys_yield(void)
+{
+  yield();
+  return 0;
+}
+
+uint64
+sys_getpa(void)
+{
+  uint64 x;
+  if (argaddr(0, &x) < 0) return -1;
+  return walkaddr(myproc()->pagetable, x) + (x & (PGSIZE - 1));
+}
+
+uint64
+sys_forkf(void)
+{
+  uint64 x;
+  if (argaddr(0, &x) < 0) return -1;
+  return forkf(x);
+}
+
+uint64
+sys_waitpid(void)
+{
+  uint64 p;
+  int x;
+
+  if(argint(0, &x) < 0)
+    return -1;
+  if(argaddr(1, &p) < 0)
+    return -1;
+
+  if (x == -1) return wait(p);
+  if ((x == 0) || (x < -1)) return -1;
+  return waitpid(x, p);
+}
+
+uint64
 sys_ps(void)
 {
-  ps();
-  return 0;
+   return ps();
 }
 
 uint64
 sys_pinfo(void)
 {
-  int pid;
-  uint64 addr;
-  if(argint(0, &pid) < 0 || argaddr(1, &addr) < 0)
+  uint64 p;
+  int x;
+
+  if(argint(0, &x) < 0)
     return -1;
-  return pinfo(pid, addr);
+  if(argaddr(1, &p) < 0)
+    return -1;
+
+  if ((x == 0) || (x < -1) || (p == 0)) return -1;
+  return pinfo(x, p);
+}
+
+uint64
+sys_forkp(void)
+{
+  int priority;
+
+  if(argint(0, &priority) < 0)
+    return -1;
+
+  return forkp(priority);
+}
+
+uint64
+sys_schedpolicy(void)
+{
+  int policy;
+
+  if(argint(0, &policy) < 0)
+    return -1;
+
+  return schedpolicy(policy);
 }

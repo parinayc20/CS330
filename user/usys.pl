@@ -36,6 +36,7 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+
 entry("getppid");
 entry("yield");
 entry("getpa");
@@ -43,3 +44,5 @@ entry("forkf");
 entry("waitpid");
 entry("ps");
 entry("pinfo");
+entry("forkp");
+entry("schedpolicy");
