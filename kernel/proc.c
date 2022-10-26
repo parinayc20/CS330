@@ -126,7 +126,6 @@ found:
   p->next_burst_len = 0;
   p->batch_process = 0;
   p->cpu_usage = 0;
-  p->prev_cpu_usage = 0;
   p->wait_time = 0;
   p->wait_st_time = -1;
   p->prev_burst_start = -1;
@@ -896,22 +895,15 @@ scheduler(void)
         acquire(&p->lock);
         if(p->state == RUNNABLE) {
           if(p->batch_process == 0){
-            p->state = RUNNING;
-            c->proc = p;
-            swtch(&c->context, &p->context);
-
-            c->proc = 0;
-            release(&p->lock);
+            p_to_sched = p;
             flag = 1;
-            break;
+            found = 1;
           }
 
-          else {
+          else 
+          if(flag == 0){
             found = 1;
-            if(p->cpu_usage != p->prev_cpu_usage) {
-              p->cpu_usage /= 2;
-              p->prev_cpu_usage = p->cpu_usage;
-            }
+            p->cpu_usage /= 2;
 
             int priority = p->priority + (p->cpu_usage / 2);
             int waiting_time = (curr_ticks - p->wait_st_time) + p->wait_time;
@@ -939,13 +931,22 @@ scheduler(void)
 
         if(c->sched_policy != SCHED_PREEMPT_UNIX)
         {
-          flag = 1;
           break;
         }
       }
 
-      if(flag || found == 0)
+      if(found == 0 || c->sched_policy != SCHED_PREEMPT_UNIX)
         continue;
+
+      if(flag == 1) {
+        acquire(&p_to_sched->lock);
+        p_to_sched->state = RUNNING;
+        c->proc = p_to_sched;
+        swtch(&c->context, &p_to_sched->context);
+        c->proc = 0;
+        release(&p_to_sched->lock);
+        continue;
+      }
 
       acquire(&p_to_sched->lock);
 
@@ -956,12 +957,36 @@ scheduler(void)
       }
       else curr_ticks = ticks;
 
+      // printf("Min Priority: %d of process: %d\n", min_priority, p_to_sched->pid);
+
       p_to_sched->wait_time += (curr_ticks - p_to_sched->wait_st_time);
       p_to_sched->wait_st_time = -1;
 
       p_to_sched->state = RUNNING;
       c->proc = p_to_sched;
+
+      int sticks;
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        sticks = ticks;
+        release(&tickslock);
+      }
+      else sticks = ticks;
+
       swtch(&c->context, &p_to_sched->context);
+
+      int eticks;
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        eticks = ticks;
+        release(&tickslock);
+      }
+      else eticks = ticks;
+
+      // int t = eticks - sticks;
+      // printf("time: %d\n", t);
+
+      p_to_sched->cpu_usage += (eticks - sticks);
       c->proc = 0;
       release(&p_to_sched->lock);
     }
@@ -1006,7 +1031,10 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+
+  // printf("Before %d of process %d\n", p->cpu_usage, p->pid);
   p->cpu_usage += SCHED_PARAM_CPU_USAGE;
+  // printf("After %d of process %d\n", p->cpu_usage, p->pid);
 
   int cticks;
   if (!holding(&tickslock)) {

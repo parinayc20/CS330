@@ -118,7 +118,6 @@ struct proc {
 
   int batch_process;
   int cpu_usage;
-  int prev_cpu_usage;
 
   int wait_time;
   int wait_st_time;
