@@ -546,21 +546,21 @@ exit(int status)
   {
     c->comp += 1;
     c->tatime += (p->endtime - p->ctime);
-    c->wtime += p->wait_time + (p->endtime - p->wait_st_time);
+    c->wtime += p->wait_time;
     c->ctime += p->endtime;
-    c->max_ctime = c->max_ctime < p->endtime ? p->endtime : c->ctime;
-    c->min_ctime = c->min_ctime > p->endtime ? p->endtime : c->ctime;
+    c->max_ctime = c->max_ctime < p->endtime ? p->endtime : c->max_ctime;
+    c->min_ctime = c->min_ctime > p->endtime ? p->endtime : c->min_ctime;
     if(c->sched_policy == 1) {
       int t = p->endtime - p->prev_burst_start;
       int err = t - p->next_burst_len;
       err = err > 0 ? err : (0-err);
-      if(t != 0) {
+      if(t > 0) {
         c->nbursts += 1;
         c->max_blen = c->max_blen < t ? t : c->max_blen;
         c->tblen += t;
         c->min_blen = c->min_blen > t ? t : c->min_blen;
       }
-      if(err != 0) {
+      if(err != 0 && t > 0 && p->next_burst_len > 0) {
         c->ebursts += 1;
         c->tebursts += err;
       }
@@ -584,7 +584,7 @@ exit(int status)
     if(c->sched_policy == 1) {
       printf("CPU bursts: count: %d, avg: %d, max: %d, min: %d\n", c->nbursts, c->tblen / c->nbursts, c->max_blen, c->min_blen);
       printf("CPU burst estimates: count: %d, avg: %d, max: %d, min: %d\n", c->nebursts, c->teblen / c->nebursts, c->max_belen, c->min_belen);
-      printf("CPU burst estimation error: count: %d, avg: %d\n", c->ebursts, c->ebursts / c->tebursts);
+      printf("CPU burst estimation error: count: %d, avg: %d\n", c->ebursts, c->tebursts / c->ebursts);
       c->nbursts = 0;
       c->tblen = 0;
       c->max_blen = 0;
@@ -725,6 +725,16 @@ scheduler(void)
           // before jumping back to us.
           p->state = RUNNING;
           c->proc = p;
+          int curr_ticks;
+          if (!holding(&tickslock)) {
+            acquire(&tickslock);
+            curr_ticks = ticks;
+            release(&tickslock);
+          }
+          else curr_ticks = ticks;
+
+          p->wait_time += (curr_ticks - p->wait_st_time);
+          p->wait_st_time = -1;
           swtch(&c->context, &p->context);
 
           // Process is done running for now.
@@ -744,6 +754,7 @@ scheduler(void)
       int min_burst_len = -1;
       struct proc *p_to_sched = 0;
       int flag = 0;
+      int found = 0;
 
       for(p = proc; p < &proc[NPROC]; p++) {
         acquire(&p->lock);
@@ -755,10 +766,12 @@ scheduler(void)
 
             c->proc = 0;
             release(&p->lock);
+            flag = 1;
             break;
           }
 
           else {
+            found = 1;
             if(min_burst_len == -1){
               min_burst_len = p->next_burst_len;
               p_to_sched = p;
@@ -778,10 +791,22 @@ scheduler(void)
           break;
         }
       }
-      if(flag)
+      if(flag || found == 0)
         continue;
 
       acquire(&p_to_sched->lock);
+
+      int curr_ticks;
+      if (!holding(&tickslock)) {
+        acquire(&tickslock);
+        curr_ticks = ticks;
+        release(&tickslock);
+      }
+      else curr_ticks = ticks;
+
+      p_to_sched->wait_time += (curr_ticks - p_to_sched->wait_st_time);
+      p_to_sched->wait_st_time = -1;
+
       p_to_sched->state = RUNNING;
       c->proc = p_to_sched;
 
@@ -808,13 +833,14 @@ scheduler(void)
       int t = eticks - sticks;
       int err = t - p_to_sched->next_burst_len;
       err = err > 0 ? err : (0-err);
-      if(err > 0 && p_to_sched->state != ZOMBIE) {
+      if(err > 0 && p_to_sched->state != ZOMBIE && t > 0 && p_to_sched->next_burst_len > 0) {
         c->tebursts += err;
         c->ebursts += 1;
       }
 
-      p_to_sched->next_burst_len = t - (SCHED_PARAM_SJF_A_NUMER * t) / SCHED_PARAM_SJF_A_DENOM + 
+      int next_burst_len = t - (SCHED_PARAM_SJF_A_NUMER * t) / SCHED_PARAM_SJF_A_DENOM + 
                               (SCHED_PARAM_SJF_A_NUMER * p_to_sched->next_burst_len) / SCHED_PARAM_SJF_A_DENOM;
+      p_to_sched->next_burst_len = next_burst_len;
 
       if(t != 0 && p_to_sched->state != ZOMBIE) {
         c->nbursts += 1;
@@ -841,6 +867,7 @@ scheduler(void)
       int min_wait_time = -1;
       struct proc *p_to_sched = 0;
       int flag = 0;
+      int found = 0;
 
       int curr_ticks = 0;
       if (!holding(&tickslock)) {
@@ -860,10 +887,12 @@ scheduler(void)
 
             c->proc = 0;
             release(&p->lock);
+            flag = 1;
             break;
           }
 
           else {
+            found = 1;
             if(p->cpu_usage != p->prev_cpu_usage) {
               p->cpu_usage /= 2;
               p->prev_cpu_usage = p->cpu_usage;
@@ -900,7 +929,7 @@ scheduler(void)
         }
       }
 
-      if(flag)
+      if(flag || found == 0)
         continue;
 
       acquire(&p_to_sched->lock);
