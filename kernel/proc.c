@@ -569,9 +569,12 @@ exit(int status)
 
   if(c->comp && c->comp == c->nump) {
     printf("Batch execution time: %d\n", (xticks - c->stime));
-    printf("Average turn-around time: %d\n", c->tatime / c->nump);
-    printf("Average waiting time: %d\n", c->wtime / c->nump);
-    printf("Completion time: avg: %d, max: %d, min: %d\n", c->ctime / c->nump, c->max_ctime, c->min_ctime);
+    int nump = c->nump;
+    if(nump == 0)
+      nump = 1;
+    printf("Average turn-around time: %d\n", c->tatime / nump);
+    printf("Average waiting time: %d\n", c->wtime / nump);
+    printf("Completion time: avg: %d, max: %d, min: %d\n", c->ctime / nump, c->max_ctime, c->min_ctime);
     c->comp = 0;
     c->nump = 0;
     c->stime = -1;
@@ -582,9 +585,21 @@ exit(int status)
     c->min_ctime = 1000000000;
 
     if(c->sched_policy == 1) {
-      printf("CPU bursts: count: %d, avg: %d, max: %d, min: %d\n", c->nbursts, c->tblen / c->nbursts, c->max_blen, c->min_blen);
-      printf("CPU burst estimates: count: %d, avg: %d, max: %d, min: %d\n", c->nebursts, c->teblen / c->nebursts, c->max_belen, c->min_belen);
-      printf("CPU burst estimation error: count: %d, avg: %d\n", c->ebursts, c->tebursts / c->ebursts);
+      int nbursts = c->nbursts;
+      if(nbursts == 0)
+        nbursts = 1;
+      printf("CPU bursts: count: %d, avg: %d, max: %d, min: %d\n", c->nbursts, c->tblen / nbursts, c->max_blen, c->min_blen);
+
+      int nebursts =  c->nebursts;
+      if(nebursts == 0)
+        nebursts = 1;
+      printf("CPU burst estimates: count: %d, avg: %d, max: %d, min: %d\n", c->nebursts, c->teblen / nebursts, c->max_belen, c->min_belen);
+
+      int ebursts = c->ebursts;
+      if(ebursts == 0)
+        ebursts = 1;
+      printf("CPU burst estimation error: count: %d, avg: %d\n", c->ebursts, c->tebursts / ebursts);
+      
       c->nbursts = 0;
       c->tblen = 0;
       c->max_blen = 0;
@@ -783,7 +798,7 @@ scheduler(void)
             }
           }
         }
-        release(&p->lock); // ye bhi check karna am I doing it correctly
+        release(&p->lock); 
 
         if(c->sched_policy != SCHED_NPREEMPT_SJF)
         {
@@ -842,7 +857,7 @@ scheduler(void)
                               (SCHED_PARAM_SJF_A_NUMER * p_to_sched->next_burst_len) / SCHED_PARAM_SJF_A_DENOM;
       p_to_sched->next_burst_len = next_burst_len;
 
-      if(t != 0 && p_to_sched->state != ZOMBIE) {
+      if(t > 0 && p_to_sched->state != ZOMBIE) {
         c->nbursts += 1;
         c->max_blen = c->max_blen < t ? t : c->max_blen;
         c->tblen += t;
