@@ -1,3 +1,5 @@
+#include "condvar.h"
+
 struct buf;
 struct context;
 struct file;
@@ -97,9 +99,11 @@ void            procinit(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);
 void            sleep(void*, struct spinlock*);
+void            condsleep(cond_t*, struct sleeplock*);
 void            userinit(void);
 int             wait(uint64);
 void            wakeup(void*);
+void            wakeupone(void*);
 void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
@@ -108,8 +112,8 @@ int		forkf(uint64);
 int		waitpid(int, uint64);
 int		ps(void);
 int		pinfo(int, uint64);
-int     forkp(int);
-int     schedpolicy(int);
+int		forkp(int);
+int		schedpolicy(int);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -188,5 +192,22 @@ void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
 
+// condvar.c
+void            cond_wait(cond_t*, struct sleeplock*);
+void            cond_signal(cond_t*);
+void            cond_broadcast(cond_t*);
+
+// barr.c
+void            barrinit(void);
+void            barrier(int,int,int);
+int             barrier_alloc(void);
+int             barrier_free(int);
+
+// buffer.c
+void            bufferinit(void);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+extern struct sleeplock printlock;
+extern struct sleeplock dummy;

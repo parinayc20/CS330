@@ -1,0 +1,1 @@
+typedef int cond_t;

@@ -20,29 +20,27 @@ main(int argc, char *argv[])
      if(buf[0] == 0) break;
      i=0;
      while (buf[i] != ' ') {
-         prio[i] = buf[i];
-	      i++;
+        prio[i] = buf[i];
+	i++;
      }
      prio[i] = '\0';
      k=0;
      while (1) {
-	      i++;
-         j=0;
-         if (!args[k]) 
-            args[k] = (char*)malloc(sizeof(char)*32);
-         while ((buf[i] != ' ') && (buf[i] != '\n')) {
-            args[k][j] = buf[i];
-            i++;
-            j++;
-         }
-         args[k][j] = '\0';
-         if (buf[i] == '\n') {
-            break;
-         }
-         k++;
+	i++;
+        j=0;
+	if (!args[k]) args[k] = (char*)malloc(sizeof(char)*32);
+        while ((buf[i] != ' ') && (buf[i] != '\n')) {
+           args[k][j] = buf[i];
+           i++;
+	   j++;
+        }
+        args[k][j] = '\0';
+	if (buf[i] == '\n') {
+	   break;
+	}
+	k++;
      }
-     if (forkp(atoi((const char*)prio)) == 0) 
-         exec(args[0], args);
+     if (forkp(atoi((const char*)prio)) == 0) exec(args[0], args);
   }
 
   exit(0);

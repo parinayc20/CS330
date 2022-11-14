@@ -1,12 +1,12 @@
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
-#include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
-#include "proc.h"
 
 volatile static int started = 0;
+
+extern int sched_policy;
 
 // start() jumps here in supervisor mode on all CPUs.
 void
@@ -31,6 +31,9 @@ main()
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
+    barrinit();
+    initsleeplock(&printlock, "print-lock");
+    initsleeplock(&dummy, "dummy-lock");
     __sync_synchronize();
     started = 1;
   } else {
@@ -43,27 +46,7 @@ main()
     plicinithart();   // ask PLIC for device interrupts
   }
 
-  //initialization
-  struct cpu *c = &cpus[cpuid()];
-  c->sched_policy = 2;
-  c->nump = 0;
-  c->comp = 0;
-  c->stime = -1;
-  c->tatime = 0;
-  c->wtime = 0;
-  c->ctime = 0;
-  c->max_ctime = 0;
-  c->min_ctime = 1000000000;
-  c->nbursts = 0;
-  c->max_blen = 0;
-  c->min_blen = 1000000000;
-  c->tblen = 0;
-  c->nebursts = 0;
-  c->max_belen = 0;
-  c->min_belen = 1000000000;
-  c->teblen = 0;
-  c->ebursts = 0;
-  c->tebursts = 0;
+  sched_policy = SCHED_PREEMPT_RR;
 
   scheduler();        
 }

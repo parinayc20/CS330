@@ -32,8 +32,8 @@ int forkf(void*);
 int waitpid(int, int*);
 int ps(void);
 int pinfo(int, struct procstat*);
-int schedpolicy(int);
 int forkp(int);
+int schedpolicy(int);
 
 // ulib.c
 int stat(const char*, struct stat*);
@@ -51,3 +51,11 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+
+int barrier_alloc(void);
+void barrier(int, int, int);
+void barrier_free(int);
+
+void buffer_cond_init(void);
+void cond_produce(int);
+int cond_consume(void);

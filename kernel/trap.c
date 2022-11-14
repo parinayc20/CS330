@@ -16,6 +16,8 @@ void kernelvec();
 
 extern int devintr();
 
+extern int sched_policy;
+
 void
 trapinit(void)
 {
@@ -77,9 +79,9 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  // see if there is a single statement to disable time interrupt
-  if(which_dev == 2 && mycpu()->sched_policy != SCHED_NPREEMPT_FCFS && mycpu()->sched_policy != SCHED_NPREEMPT_SJF)
-    yield();
+  if(which_dev == 2) {
+    if ((sched_policy != SCHED_NPREEMPT_FCFS) && (sched_policy != SCHED_NPREEMPT_SJF)) yield();
+  }
 
   usertrapret();
 }
@@ -151,8 +153,9 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING && mycpu()->sched_policy != SCHED_NPREEMPT_FCFS && mycpu()->sched_policy != SCHED_NPREEMPT_SJF)
-    yield();
+  if(which_dev == 2 && myproc() != 0 && myproc()->state == RUNNING) {
+     if ((sched_policy != SCHED_NPREEMPT_FCFS) && (sched_policy != SCHED_NPREEMPT_SJF)) yield();
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.

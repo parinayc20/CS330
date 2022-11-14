@@ -24,27 +24,6 @@ struct cpu {
   struct context context;     // swtch() here to enter scheduler().
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
-  int sched_policy;           // Scheduling policy
-
-  // batch statistics
-  int nump;
-  int comp;
-  int stime;
-  int tatime;
-  int wtime;
-  int ctime;
-  int max_ctime;
-  int min_ctime;
-  int nbursts;
-  int max_blen;
-  int min_blen;
-  int tblen;
-  int nebursts;
-  int max_belen;
-  int min_belen;
-  int teblen;
-  int ebursts;
-  int tebursts;
 };
 
 extern struct cpu cpus[NCPU];
@@ -113,16 +92,9 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
-  int priority;
-  int next_burst_len;
-
-  int batch_process;
-  int cpu_usage;
-
-  int wait_time;
-  int wait_st_time;
-
-  int prev_burst_start;
+  int base_priority;	       // Static base priority
+  int priority;		       // Dynamic priority of a process
+  int is_batchproc;	       // Is it part of a batch created using forkp
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -140,4 +112,12 @@ struct proc {
   int ctime;		       // Creation time
   int stime;		       // Execution start time
   int endtime;		       // Execution end time
+
+  int waittime;		       // Wait time in ready queue
+  int waitstart;	       // Time when it enters ready queue
+
+  int burst_start;	       // Start of current CPU burst
+  int nextburst_estimate;      // s(n+1)
+
+  int cpu_usage;	       // CPU usage
 };

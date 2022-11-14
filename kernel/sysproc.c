@@ -5,7 +5,14 @@
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
+#include "barr.h"
+#include "buffer.h"
+
+struct sleeplock printlock;
+int tail = 0;
+int head = 0;
 
 uint64
 sys_exit(void)
@@ -169,21 +176,100 @@ sys_pinfo(void)
 uint64
 sys_forkp(void)
 {
-  int priority;
-
-  if(argint(0, &priority) < 0)
-    return -1;
-
-  return forkp(priority);
+  int x;
+  if(argint(0, &x) < 0) return -1;
+  return forkp(x);
 }
 
 uint64
 sys_schedpolicy(void)
 {
-  int policy;
+  int x;
+  if(argint(0, &x) < 0) return -1;
+  return schedpolicy(x);
+}
 
-  if(argint(0, &policy) < 0)
-    return -1;
+uint64
+sys_barrier_alloc(void)
+{
+  return barrier_alloc();
+}
 
-  return schedpolicy(policy);
+uint64
+sys_barrier(void)
+{
+  int inst_num, id, np;
+  if(argint(0, &inst_num) < 0) return -1;
+  if(argint(1, &id) < 0) return -1;
+  if(argint(2, &np) < 0) return -1;
+ 
+  barrier(inst_num, id, np);
+
+  return 0;
+}
+
+uint64
+sys_barrier_free(void)
+{
+  int id;
+  if(argint(0, &id) < 0) 
+      return -1;
+  return barrier_free(id);
+}
+
+uint64
+sys_buffer_cond_init(void)
+{
+  bufferinit();
+  return 0;
+}
+
+uint64
+sys_cond_produce(void)
+{
+  int val;
+  if(argint(0, &val) < 0) return -1;
+  int ind = 0;
+
+  acquiresleep(&insert_lock);
+  ind = tail;
+  tail = (tail + 1) % NUM_BUFFER;
+  releasesleep(&insert_lock);
+
+  acquiresleep(&buf_arr[ind].lock);
+  while(buf_arr[ind].full) {
+    cond_wait(&buf_arr[ind].deleted, &buf_arr[ind].lock);
+  }
+  buf_arr[ind].value = val;
+  buf_arr[ind].full = 1;
+  cond_signal(&buf_arr[ind].inserted);
+  releasesleep(&buf_arr[ind].lock);
+
+  return 0;
+}
+
+uint64
+sys_cond_consume(void)
+{
+  int ind = 0;
+  int val = 0;
+  
+  acquiresleep(&delete_lock);
+  ind = head;
+  head = (head + 1) % NUM_BUFFER;
+  releasesleep(&delete_lock);
+
+  acquiresleep(&buf_arr[ind].lock);
+  while(!buf_arr[ind].full) {
+    cond_wait(&buf_arr[ind].inserted, &buf_arr[ind].lock);
+  }
+  buf_arr[ind].full = 0;
+  val = buf_arr[ind].value;
+  cond_signal(&buf_arr[ind].deleted);
+  releasesleep(&buf_arr[ind].lock);
+  acquiresleep(&printlock);
+  printf("%d ", val);
+  releasesleep(&printlock);
+
+  return val;
 }

@@ -28,5 +28,13 @@
 #define SYS_waitpid 26
 #define SYS_ps      27
 #define SYS_pinfo   28
-#define SYS_schedpolicy 29
-#define SYS_forkp   30
+#define SYS_forkp   29
+#define SYS_schedpolicy 30
+
+#define SYS_barrier_alloc   31
+#define SYS_barrier         32
+#define SYS_barrier_free    33
+
+#define SYS_buffer_cond_init    34
+#define SYS_cond_produce        35
+#define SYS_cond_consume        36

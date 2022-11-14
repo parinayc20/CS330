@@ -28,7 +28,10 @@ OBJS = \
   $K/sysfile.o \
   $K/kernelvec.o \
   $K/plic.o \
-  $K/virtio_disk.o
+  $K/virtio_disk.o \
+  $K/condvar.o \
+  $K/barr.o	\
+  $K/buffer.o	
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
@@ -116,7 +119,10 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 .PRECIOUS: %.o
 
 UPROGS=\
+        $U/_barriertest\
+	$U/_barriergrouptest\
 	$U/_cat\
+	$U/_condprodconstest\
 	$U/_echo\
 	$U/_find\
 	$U/_forksleep\
@@ -132,6 +138,7 @@ UPROGS=\
 	$U/_primes\
 	$U/_primefactors\
 	$U/_rm\
+	$U/_semprodconstest\
 	$U/_sh\
 	$U/_sleep\
 	$U/_stressfs\
@@ -160,9 +167,12 @@ JOBFILES=\
 	$U/batch2.txt\
 	$U/batch3.txt\
 	$U/batch4.txt\
+	$U/batch4_sjf.txt\
 	$U/batch5.txt\
+	$U/batch5_unix.txt\
 	$U/batch6.txt\
-	$U/batch7.txt\
+	$U/batch6_unix.txt\
+	$U/batch7.txt
 
 fs.img: mkfs/mkfs README $(UPROGS) $(JOBFILES)
 	mkfs/mkfs fs.img README $(UPROGS) $(JOBFILES)
@@ -184,7 +194,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::$(GDBPORT)"; \
 	else echo "-s -p $(GDBPORT)"; fi)
 ifndef CPUS
-CPUS := 1
+CPUS := 2
 endif
 
 QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
