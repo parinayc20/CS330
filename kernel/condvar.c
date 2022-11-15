@@ -6,8 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "procstat.h"
-#include "sleeplock.h"
-// #include "condvar.h"
+#include "condvar.h"
 
 void
 cond_wait (cond_t *cv, struct sleeplock *lock) {

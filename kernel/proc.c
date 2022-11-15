@@ -996,23 +996,23 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
-  uint xticks;
+  // uint xticks;
   int flag = 0;
 
-  if (!holding(&tickslock)) {
-     acquire(&tickslock);
-     xticks = ticks;
-     release(&tickslock);
-  }
-  else xticks = ticks;
+  // if (!holding(&tickslock)) {
+  //    acquire(&tickslock);
+  //    xticks = ticks;
+  //    release(&tickslock);
+  // }
+  // else xticks = ticks;
 
-  int mpid = -10;
-  for(p = proc; p < &proc[NPROC]; p++) {
-    if (p == myproc()){
-      printf("I am here %d\n", p->pid);
-      mpid = p->pid;
-    }
-  }
+  // int mpid = -10;
+  // for(p = proc; p < &proc[NPROC]; p++) {
+  //   if (p == myproc()){
+  //     printf("I am here %d\n", p->pid);
+  //     mpid = p->pid;
+  //   }
+  // }
 
   for(p = proc; p < &proc[NPROC]; p++) {
     flag = 0;
@@ -1021,42 +1021,42 @@ wakeup(void *chan)
       flag = 1;
     }
     if(p != myproc()){
-      if(flag)
-      printf("a %d %d\n", pid, mpid);
+      if(flag);
+      // printf("a %d %d\n", pid, mpid);
       acquire(&p->lock);
-      if(flag)
-      printf("r %d %d\n", pid, mpid);
+      if(flag);
+      // printf("r %d %d\n", pid, mpid);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
-	p->waitstart = xticks;
+	// p->waitstart = xticks;
       }
       release(&p->lock);
     }
-    else
-    {
-      printf("my pid: %d\n", pid);
-    }
+    else;
+    // {
+    //   printf("my pid: %d\n", pid);
+    // }
   }
 }
 
 void wakeupone(void *chan)
 {
   struct proc *p;
-  uint xticks;
+  // uint xticks;
 
-  if (!holding(&tickslock)) {
-     acquire(&tickslock);
-     xticks = ticks;
-     release(&tickslock);
-  }
-  else xticks = ticks;
+  // if (!holding(&tickslock)) {
+  //    acquire(&tickslock);
+  //    xticks = ticks;
+  //    release(&tickslock);
+  // }
+  // else xticks = ticks;
 
   for(p = proc; p < &proc[NPROC]; p++) {
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
-	      p->waitstart = xticks;
+	      // p->waitstart = xticks;
         release(&p->lock);
         return;
       }
@@ -1141,7 +1141,7 @@ procdump(void)
   struct proc *p;
   char *state;
 
-  printf("\n");
+  // printf("\n");
   for(p = proc; p < &proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;

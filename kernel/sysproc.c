@@ -7,12 +7,18 @@
 #include "spinlock.h"
 #include "sleeplock.h"
 #include "proc.h"
+#include "semaphore.h"
 #include "barr.h"
 #include "buffer.h"
+#include "sem_buffer.h"
+
 
 struct sleeplock printlock;
 int tail = 0;
 int head = 0;
+int sem_tail = 0;
+int sem_head = 0;
+
 
 uint64
 sys_exit(void)
@@ -269,6 +275,45 @@ sys_cond_consume(void)
   releasesleep(&buf_arr[ind].lock);
   acquiresleep(&printlock);
   printf("%d ", val);
+  releasesleep(&printlock);
+
+  return val;
+}
+
+uint64
+sys_buffer_sem_init(void)
+{
+  sembufferinit();
+  return 0;
+}
+
+uint64
+sys_sem_produce(void){
+  int val;
+  if(argint(0,&val) < 0) return -1;
+  
+  sem_wait(&empty);
+  sem_wait(&pro);
+    sem_buf_arr[sem_tail].value = val;
+    sem_tail = (sem_tail + 1) % NUM_SEM_BUFFER;
+  sem_post(&pro);
+  sem_post(&full);
+
+  return 0;
+}
+
+uint64
+sys_sem_consume(void){
+  int val = 0;
+  sem_wait(&full);
+  sem_wait(&con);
+    val = sem_buf_arr[sem_head].value;
+    sem_head = (sem_head + 1) % NUM_SEM_BUFFER;
+  sem_post(&con);
+  sem_post(&empty);
+
+  acquiresleep(&printlock);
+    printf("%d ", val);
   releasesleep(&printlock);
 
   return val;

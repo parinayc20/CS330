@@ -1,4 +1,5 @@
 #include "condvar.h"
+#include "semaphore.h"
 
 struct buf;
 struct context;
@@ -197,6 +198,11 @@ void            cond_wait(cond_t*, struct sleeplock*);
 void            cond_signal(cond_t*);
 void            cond_broadcast(cond_t*);
 
+// semaphore.c
+void sem_init(struct sem_t*,int);
+void sem_wait(struct sem_t*);
+void sem_post(struct sem_t*);
+
 // barr.c
 void            barrinit(void);
 void            barrier(int,int,int);
@@ -206,8 +212,13 @@ int             barrier_free(int);
 // buffer.c
 void            bufferinit(void);
 
+//sem_buffer.c
+void            sembufferinit(void);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+
 
 extern struct sleeplock printlock;
 extern struct sleeplock dummy;

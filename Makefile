@@ -30,8 +30,10 @@ OBJS = \
   $K/plic.o \
   $K/virtio_disk.o \
   $K/condvar.o \
+  $K/semaphore.o \
   $K/barr.o	\
-  $K/buffer.o	
+  $K/buffer.o	\
+  $K/sem_buffer.o
 
 # riscv64-unknown-elf- or riscv64-linux-gnu-
 # perhaps in /opt/riscv/bin
