@@ -990,21 +990,21 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
-  uint xticks;
+  // uint xticks;
 
-  if (!holding(&tickslock)) {
-     acquire(&tickslock);
-     xticks = ticks;
-     release(&tickslock);
-  }
-  else xticks = ticks;
+  // if (!holding(&tickslock)) {
+  //    acquire(&tickslock);
+  //    xticks = ticks;
+  //    release(&tickslock);
+  // }
+  // else xticks = ticks;
 
   for(p = proc; p < &proc[NPROC]; p++) {
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
-	p->waitstart = xticks;
+	// p->waitstart = xticks;
       }
       release(&p->lock);
     }
