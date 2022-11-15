@@ -967,21 +967,15 @@ sleep(void *chan, struct spinlock *lk)
 void 
 condsleep(cond_t *cv, struct sleeplock *lk) {
   struct proc *p = myproc();
-  int pid = p->pid;
   acquiresleep(&dummy);
   acquire(&p->lock);
-  printf("m1 %d\n", pid);
   releasesleep(lk);
-  printf("m2 %d\n", pid);
   releasesleep(&dummy);
-  printf("m3 %d\n", pid);
 
   p->chan = cv;
   p->state = SLEEPING;
 
-  printf("Gone to sleep\n");
   sched();
-  printf("Back from sleep\n");
 
   p->chan = 0;
   
@@ -996,46 +990,24 @@ void
 wakeup(void *chan)
 {
   struct proc *p;
-  // uint xticks;
-  int flag = 0;
+  uint xticks;
 
-  // if (!holding(&tickslock)) {
-  //    acquire(&tickslock);
-  //    xticks = ticks;
-  //    release(&tickslock);
-  // }
-  // else xticks = ticks;
-
-  // int mpid = -10;
-  // for(p = proc; p < &proc[NPROC]; p++) {
-  //   if (p == myproc()){
-  //     printf("I am here %d\n", p->pid);
-  //     mpid = p->pid;
-  //   }
-  // }
+  if (!holding(&tickslock)) {
+     acquire(&tickslock);
+     xticks = ticks;
+     release(&tickslock);
+  }
+  else xticks = ticks;
 
   for(p = proc; p < &proc[NPROC]; p++) {
-    flag = 0;
-    int pid = p->pid;
-    if(pid >=3){
-      flag = 1;
-    }
     if(p != myproc()){
-      if(flag);
-      // printf("a %d %d\n", pid, mpid);
       acquire(&p->lock);
-      if(flag);
-      // printf("r %d %d\n", pid, mpid);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
-	// p->waitstart = xticks;
+	p->waitstart = xticks;
       }
       release(&p->lock);
     }
-    else;
-    // {
-    //   printf("my pid: %d\n", pid);
-    // }
   }
 }
 

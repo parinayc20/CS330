@@ -28,9 +28,9 @@ barrier(int inst_num, int id, int np) {
     struct barr *b = &barriers[id];
 
     acquiresleep(&b -> lock);
-    // acquiresleep(&printlock);
+    acquiresleep(&printlock);
     printf("%d: Entered barrier#%d for barrier array id %d\n", pid, inst_num, id);
-    // releasesleep(&printlock);
+    releasesleep(&printlock);
     b->processes += 1;
     if(b->processes < np) {
         // while(b->processes < np)
@@ -40,9 +40,9 @@ barrier(int inst_num, int id, int np) {
         cond_broadcast(&b->cv);
         b->processes = 0;
     }
-    // acquiresleep(&printlock);
+    acquiresleep(&printlock);
     printf("%d: Finished barrier#%d for barrier array id %d\n", pid, inst_num, id);
-    // releasesleep(&printlock);
+    releasesleep(&printlock);
     releasesleep(&b->lock);
 }
 
