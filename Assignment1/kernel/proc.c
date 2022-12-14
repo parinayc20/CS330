@@ -5,13 +5,6 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
-#include "procstat.h"
-#include "sleeplock.h"
-#include "buffer.h"
-#include "barr.h"
-#include "sem_buffer.h" 
-
-int sched_policy;
 
 struct cpu cpus[NCPU];
 
@@ -21,30 +14,9 @@ struct proc *initproc;
 
 int nextpid = 1;
 struct spinlock pid_lock;
-struct sleeplock dummy;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
-
-//Stats
-static int batch_start = 0x7FFFFFFF;
-static int batchsize = 0;
-static int batchsize2 = 0;
-static int turnaround = 0;
-static int completion_tot = 0;
-static int waiting_tot = 0;
-static int completion_max = 0;
-static int completion_min = 0x7FFFFFFF;
-static int num_cpubursts = 0;
-static int cpubursts_tot = 0;
-static int cpubursts_max = 0;
-static int cpubursts_min = 0x7FFFFFFF;
-static int num_cpubursts_est = 0;
-static int cpubursts_est_tot = 0;
-static int cpubursts_est_max = 0;
-static int cpubursts_est_min = 0x7FFFFFFF;
-static int estimation_error = 0;
-static int estimation_error_instance = 0;
 
 extern char trampoline[]; // trampoline.S
 
@@ -133,7 +105,6 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-  uint xticks;
 
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -148,6 +119,12 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+
+  acquire(&tickslock);
+  p->ctime = ticks;
+  release(&tickslock);
+  p->stime = -1;
+  p->etime = -1;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -169,17 +146,6 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
-
-  acquire(&tickslock);
-  xticks = ticks;
-  release(&tickslock);
-
-  p->ctime = xticks;
-  p->stime = -1;
-  p->endtime = -1;
-
-  p->is_batchproc = 0;
-  p->cpu_usage = 0;
 
   return p;
 }
@@ -359,7 +325,7 @@ fork(void)
 }
 
 int
-forkf(uint64 faddr)
+forkf(uint64 func_addr)
 {
   int i, pid;
   struct proc *np;
@@ -383,8 +349,7 @@ forkf(uint64 faddr)
 
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
-  // Make child to jump to function
-  np->trapframe->epc = faddr;
+  np->trapframe->epc = func_addr;
 
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
@@ -404,67 +369,6 @@ forkf(uint64 faddr)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
-  release(&np->lock);
-
-  return pid;
-}
-
-// Create a new process, copying the parent.
-// Sets up child kernel stack to return as if from fork() system call.
-int
-forkp(int priority)
-{
-  int i, pid;
-  struct proc *np;
-  struct proc *p = myproc();
-
-  // Allocate process.
-  if((np = allocproc()) == 0){
-    return -1;
-  }
-
-  // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
-    freeproc(np);
-    release(&np->lock);
-    return -1;
-  }
-  np->sz = p->sz;
-
-  // copy saved user registers.
-  *(np->trapframe) = *(p->trapframe);
-
-  // Cause fork to return 0 in the child.
-  np->trapframe->a0 = 0;
-
-  // increment reference counts on open file descriptors.
-  for(i = 0; i < NOFILE; i++)
-    if(p->ofile[i])
-      np->ofile[i] = filedup(p->ofile[i]);
-  np->cwd = idup(p->cwd);
-
-  safestrcpy(np->name, p->name, sizeof(p->name));
-
-  pid = np->pid;
-
-  np->base_priority = priority;
-
-  np->is_batchproc = 1;
-  np->nextburst_estimate = 0;
-  np->waittime = 0;
-
-  release(&np->lock);
-
-  batchsize++;
-  batchsize2++;
-
-  acquire(&wait_lock);
-  np->parent = p;
-  release(&wait_lock);
-
-  acquire(&np->lock);
-  np->state = RUNNABLE;
-  np->waitstart = np->ctime;
   release(&np->lock);
 
   return pid;
@@ -492,7 +396,6 @@ void
 exit(int status)
 {
   struct proc *p = myproc();
-  uint xticks;
 
   if(p == initproc)
     panic("init exiting");
@@ -523,71 +426,11 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
-
-  release(&wait_lock);
-
   acquire(&tickslock);
-  xticks = ticks;
+  p->etime = ticks;
   release(&tickslock);
 
-  p->endtime = xticks;
-
-  if (p->is_batchproc) {
-
-     if ((xticks - p->burst_start) > 0) {
-        num_cpubursts++;
-        cpubursts_tot += (xticks - p->burst_start);
-        if (cpubursts_max < (xticks - p->burst_start)) cpubursts_max = xticks - p->burst_start;
-        if (cpubursts_min > (xticks - p->burst_start)) cpubursts_min = xticks - p->burst_start;
-        if (p->nextburst_estimate > 0) {
-           estimation_error += ((p->nextburst_estimate >= (xticks - p->burst_start)) ? (p->nextburst_estimate - (xticks - p->burst_start)) : ((xticks - p->burst_start) - p->nextburst_estimate));
-           estimation_error_instance++;
-        }
-        p->nextburst_estimate = (xticks - p->burst_start) - ((xticks - p->burst_start)*SCHED_PARAM_SJF_A_NUMER)/SCHED_PARAM_SJF_A_DENOM + (p->nextburst_estimate*SCHED_PARAM_SJF_A_NUMER)/SCHED_PARAM_SJF_A_DENOM;
-        if (p->nextburst_estimate > 0) {
-           num_cpubursts_est++;
-           cpubursts_est_tot += p->nextburst_estimate;
-           if (cpubursts_est_max < p->nextburst_estimate) cpubursts_est_max = p->nextburst_estimate;
-           if (cpubursts_est_min > p->nextburst_estimate) cpubursts_est_min = p->nextburst_estimate;
-        }
-     }
-
-     if (p->stime < batch_start) batch_start = p->stime;
-     batchsize--;
-     turnaround += (p->endtime - p->stime);
-     waiting_tot += p->waittime;
-     completion_tot += p->endtime;
-     if (p->endtime > completion_max) completion_max = p->endtime;
-     if (p->endtime < completion_min) completion_min = p->endtime;
-     if (batchsize == 0) {
-        printf("\nBatch execution time: %d\n", p->endtime - batch_start);
-	printf("Average turn-around time: %d\n", turnaround/batchsize2);
-	printf("Average waiting time: %d\n", waiting_tot/batchsize2);
-	printf("Completion time: avg: %d, max: %d, min: %d\n", completion_tot/batchsize2, completion_max, completion_min);
-	if ((sched_policy == SCHED_NPREEMPT_FCFS) || (sched_policy == SCHED_NPREEMPT_SJF)) {
-	   printf("CPU bursts: count: %d, avg: %d, max: %d, min: %d\n", num_cpubursts, cpubursts_tot/num_cpubursts, cpubursts_max, cpubursts_min);
-	   printf("CPU burst estimates: count: %d, avg: %d, max: %d, min: %d\n", num_cpubursts_est, cpubursts_est_tot/num_cpubursts_est, cpubursts_est_max, cpubursts_est_min);
-	   printf("CPU burst estimation error: count: %d, avg: %d\n", estimation_error_instance, estimation_error/estimation_error_instance);
-	}
-	batchsize2 = 0;
-	batch_start = 0x7FFFFFFF;
-	turnaround = 0;
-	waiting_tot = 0;
-	completion_tot = 0;
-	completion_max = 0;
-	completion_min = 0x7FFFFFFF;
-	num_cpubursts = 0;
-        cpubursts_tot = 0;
-        cpubursts_max = 0;
-        cpubursts_min = 0x7FFFFFFF;
-	num_cpubursts_est = 0;
-        cpubursts_est_tot = 0;
-        cpubursts_est_max = 0;
-        cpubursts_est_min = 0x7FFFFFFF;
-	estimation_error = 0;
-        estimation_error_instance = 0;
-     }
-  }
+  release(&wait_lock);
 
   // Jump into the scheduler, never to return.
   sched();
@@ -644,45 +487,51 @@ wait(uint64 addr)
 }
 
 int
-waitpid(int pid, uint64 addr)
+waitpid(int ch_pid, uint64 addr)
 {
   struct proc *np;
+  int haskid, pid;
   struct proc *p = myproc();
-  int found=0;
+  int child_pid = ch_pid;
 
   acquire(&wait_lock);
 
   for(;;){
-    // Scan through table looking for child with pid
+    // Scan through table looking for exited children.
+    haskid = 0;
     for(np = proc; np < &proc[NPROC]; np++){
-      if((np->parent == p) && (np->pid == pid)){
-	found = 1;
+      if(ch_pid == -1){
+        child_pid = np->pid;
+      }
+      if(np->parent == p && np->pid == child_pid){
         // make sure the child isn't still in exit() or swtch().
         acquire(&np->lock);
 
+        haskid = 1;
         if(np->state == ZOMBIE){
-           if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
+          // Found
+          pid = np->pid;
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
                                   sizeof(np->xstate)) < 0) {
-             release(&np->lock);
-             release(&wait_lock);
-             return -1;
-           }
-           freeproc(np);
-           release(&np->lock);
-           release(&wait_lock);
-           return pid;
-	}
-
+            release(&np->lock);
+            release(&wait_lock);
+            return -1;
+          }
+          freeproc(np);
+          release(&np->lock);
+          release(&wait_lock);
+          return pid;
+        }
         release(&np->lock);
       }
     }
 
     // No point waiting if we don't have any children.
-    if(!found || p->killed){
+    if(!haskid || p->killed){
       release(&wait_lock);
       return -1;
     }
-
+    
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -699,119 +548,33 @@ void
 scheduler(void)
 {
   struct proc *p;
-  struct proc *q;
   struct cpu *c = mycpu();
-  uint xticks;
-  int min_burst, min_prio;
   
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
-    if (sched_policy == SCHED_NPREEMPT_SJF) {
-       min_burst = 0x7FFFFFFF;
-       acquire(&tickslock);
-       xticks = ticks;
-       release(&tickslock);
-       q = 0;
-       for(p = proc; p < &proc[NPROC]; p++) {
-          acquire(&p->lock);
-	  if(p->state == RUNNABLE) {
-	     if (!p->is_batchproc) {
-                if (q) release(&q->lock);
-		q = p;  // Allow main to finish
-		break;
-	     }
-             else if (p->nextburst_estimate < min_burst) {
-	        min_burst = p->nextburst_estimate;
-		if (q) release(&q->lock);
-		q = p;
-	     }
-             else release(&p->lock);
-	  }
-	  else release(&p->lock);
-       }
-       if (q) {
-          q->state = RUNNING;
-          q->waittime += (xticks - q->waitstart);
-          q->burst_start = xticks;
-          c->proc = q;
-          swtch(&c->context, &q->context);
-
-          // Process is done running for now.
-          // It should have changed its p->state before coming back.
-          c->proc = 0;
-	  release(&q->lock);
-       }
-    }
-    else if (sched_policy == SCHED_PREEMPT_UNIX) {
-       min_prio = 0x7FFFFFFF;
-       acquire(&tickslock);
-       xticks = ticks;
-       release(&tickslock);
-       for(p = proc; p < &proc[NPROC]; p++) {
-          acquire(&p->lock);
-	  if(p->state == RUNNABLE) {
-	     p->cpu_usage = p->cpu_usage/2;
-	     p->priority = p->base_priority + (p->cpu_usage/2);
-	  }
-	  release(&p->lock);
-       }
-       q = 0;
-       for(p = proc; p < &proc[NPROC]; p++) {
-          acquire(&p->lock);
-          if(p->state == RUNNABLE) {
-             if (!p->is_batchproc) {
-                if (q) release(&q->lock);
-                q = p;  // Allow main to finish
-                break;
-             }
-             else if (p->priority < min_prio) {
-                min_prio = p->priority;
-                if (q) release(&q->lock);
-                q = p;
-             }
-             else release(&p->lock);
-          }
-          else release(&p->lock);
-       }
-       if (q) {
-          q->state = RUNNING;
-          q->waittime += (xticks - q->waitstart);
-          q->burst_start = xticks;
-          c->proc = q;
-          swtch(&c->context, &q->context);
-
-          // Process is done running for now.
-          // It should have changed its p->state before coming back.
-          c->proc = 0;
-          release(&q->lock);
-       }
-    }
-    else {
-       for(p = proc; p < &proc[NPROC]; p++) {
-          if ((sched_policy != SCHED_NPREEMPT_FCFS) && (sched_policy != SCHED_PREEMPT_RR)) break;
+    for(p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if(p->state == RUNNABLE) {
+        // Switch to chosen process.  It is the process's job
+        // to release its lock and then reacquire it
+        // before jumping back to us.
+        if(p->stime == -1){
           acquire(&tickslock);
-          xticks = ticks;
+          p->stime = ticks;
           release(&tickslock);
-          acquire(&p->lock);
-          if(p->state == RUNNABLE) {
-            // Switch to chosen process.  It is the process's job
-            // to release its lock and then reacquire it
-            // before jumping back to us.
-            p->state = RUNNING;
-	    p->waittime += (xticks - p->waitstart);
-	    p->burst_start = xticks;
-            c->proc = p;
-            swtch(&c->context, &p->context);
+        }
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
 
-            // Process is done running for now.
-            // It should have changed its p->state before coming back.
-            c->proc = 0;
-          }
-          release(&p->lock);
-       }
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+      }
+      release(&p->lock);
     }
   }
 }
@@ -848,33 +611,8 @@ void
 yield(void)
 {
   struct proc *p = myproc();
-  uint xticks;
-
-  acquire(&tickslock);
-  xticks = ticks;
-  release(&tickslock);
-
   acquire(&p->lock);
   p->state = RUNNABLE;
-  p->waitstart = xticks;
-  p->cpu_usage += SCHED_PARAM_CPU_USAGE;
-  if ((p->is_batchproc) && ((xticks - p->burst_start) > 0)) {
-     num_cpubursts++;
-     cpubursts_tot += (xticks - p->burst_start);
-     if (cpubursts_max < (xticks - p->burst_start)) cpubursts_max = xticks - p->burst_start;
-     if (cpubursts_min > (xticks - p->burst_start)) cpubursts_min = xticks - p->burst_start;
-     if (p->nextburst_estimate > 0) {
-        estimation_error += ((p->nextburst_estimate >= (xticks - p->burst_start)) ? (p->nextburst_estimate - (xticks - p->burst_start)) : ((xticks - p->burst_start) - p->nextburst_estimate));
-	estimation_error_instance++;
-     }
-     p->nextburst_estimate = (xticks - p->burst_start) - ((xticks - p->burst_start)*SCHED_PARAM_SJF_A_NUMER)/SCHED_PARAM_SJF_A_DENOM + (p->nextburst_estimate*SCHED_PARAM_SJF_A_NUMER)/SCHED_PARAM_SJF_A_DENOM;
-     if (p->nextburst_estimate > 0) {
-        num_cpubursts_est++;
-        cpubursts_est_tot += p->nextburst_estimate;
-        if (cpubursts_est_max < p->nextburst_estimate) cpubursts_est_max = p->nextburst_estimate;
-        if (cpubursts_est_min > p->nextburst_estimate) cpubursts_est_min = p->nextburst_estimate;
-     }
-  }
   sched();
   release(&p->lock);
 }
@@ -885,16 +623,9 @@ void
 forkret(void)
 {
   static int first = 1;
-  uint xticks;
 
   // Still holding p->lock from scheduler.
   release(&myproc()->lock);
-
-  acquire(&tickslock);
-  xticks = ticks;
-  release(&tickslock);
-
-  myproc()->stime = xticks;
 
   if (first) {
     // File system initialization must be run in the context of a
@@ -913,14 +644,6 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  uint xticks;
-
-  if (!holding(&tickslock)) {
-     acquire(&tickslock);
-     xticks = ticks;
-     release(&tickslock);
-  }
-  else xticks = ticks;
   
   // Must acquire p->lock in order to
   // change p->state and then call sched.
@@ -936,26 +659,6 @@ sleep(void *chan, struct spinlock *lk)
   p->chan = chan;
   p->state = SLEEPING;
 
-  p->cpu_usage += (SCHED_PARAM_CPU_USAGE/2);
-
-  if ((p->is_batchproc) && ((xticks - p->burst_start) > 0)) {
-     num_cpubursts++;
-     cpubursts_tot += (xticks - p->burst_start);
-     if (cpubursts_max < (xticks - p->burst_start)) cpubursts_max = xticks - p->burst_start;
-     if (cpubursts_min > (xticks - p->burst_start)) cpubursts_min = xticks - p->burst_start;
-     if (p->nextburst_estimate > 0) {
-	estimation_error += ((p->nextburst_estimate >= (xticks - p->burst_start)) ? (p->nextburst_estimate - (xticks - p->burst_start)) : ((xticks - p->burst_start) - p->nextburst_estimate));
-        estimation_error_instance++;
-     }
-     p->nextburst_estimate = (xticks - p->burst_start) - ((xticks - p->burst_start)*SCHED_PARAM_SJF_A_NUMER)/SCHED_PARAM_SJF_A_DENOM + (p->nextburst_estimate*SCHED_PARAM_SJF_A_NUMER)/SCHED_PARAM_SJF_A_DENOM;
-     if (p->nextburst_estimate > 0) {
-        num_cpubursts_est++;
-        cpubursts_est_tot += p->nextburst_estimate;
-        if (cpubursts_est_max < p->nextburst_estimate) cpubursts_est_max = p->nextburst_estimate;
-        if (cpubursts_est_min > p->nextburst_estimate) cpubursts_est_min = p->nextburst_estimate;
-     }
-  }
-
   sched();
 
   // Tidy up.
@@ -966,74 +669,18 @@ sleep(void *chan, struct spinlock *lk)
   acquire(lk);
 }
 
-
-void 
-condsleep(cond_t *cv, struct sleeplock *lk) {
-  struct proc *p = myproc();
-  acquiresleep(&dummy);
-  acquire(&p->lock);
-  releasesleep(lk);
-  releasesleep(&dummy);
-
-  p->chan = cv;
-  p->state = SLEEPING;
-
-  sched();
-
-  p->chan = 0;
-  
-  release(&p->lock);
-  acquiresleep(lk);
-
-}
-
 // Wake up all processes sleeping on chan.
 // Must be called without any p->lock.
 void
 wakeup(void *chan)
 {
   struct proc *p;
-  // uint xticks;
-
-  // if (!holding(&tickslock)) {
-  //    acquire(&tickslock);
-  //    xticks = ticks;
-  //    release(&tickslock);
-  // }
-  // else xticks = ticks;
 
   for(p = proc; p < &proc[NPROC]; p++) {
     if(p != myproc()){
       acquire(&p->lock);
       if(p->state == SLEEPING && p->chan == chan) {
         p->state = RUNNABLE;
-	// p->waitstart = xticks;
-      }
-      release(&p->lock);
-    }
-  }
-}
-
-void wakeupone(void *chan)
-{
-  struct proc *p;
-  // uint xticks;
-
-  // if (!holding(&tickslock)) {
-  //    acquire(&tickslock);
-  //    xticks = ticks;
-  //    release(&tickslock);
-  // }
-  // else xticks = ticks;
-
-  for(p = proc; p < &proc[NPROC]; p++) {
-    if(p != myproc()){
-      acquire(&p->lock);
-      if(p->state == SLEEPING && p->chan == chan) {
-        p->state = RUNNABLE;
-	      // p->waitstart = xticks;
-        release(&p->lock);
-        return;
       }
       release(&p->lock);
     }
@@ -1047,11 +694,6 @@ int
 kill(int pid)
 {
   struct proc *p;
-  uint xticks;
-
-  acquire(&tickslock);
-  xticks = ticks;
-  release(&tickslock);
 
   for(p = proc; p < &proc[NPROC]; p++){
     acquire(&p->lock);
@@ -1060,7 +702,6 @@ kill(int pid)
       if(p->state == SLEEPING){
         // Wake process from sleep().
         p->state = RUNNABLE;
-	p->waitstart = xticks;
       }
       release(&p->lock);
       return 0;
@@ -1116,7 +757,7 @@ procdump(void)
   struct proc *p;
   char *state;
 
-  // printf("\n");
+  printf("\n");
   for(p = proc; p < &proc[NPROC]; p++){
     if(p->state == UNUSED)
       continue;
@@ -1129,226 +770,145 @@ procdump(void)
   }
 }
 
-// Print a process listing to console with proper locks held.
-// Caution: don't invoke too often; can slow down the machine.
-int
+void
 ps(void)
 {
-   static char *states[] = {
+  static char *states[] = {
   [UNUSED]    "unused",
-  [SLEEPING]  "sleep",
+  [SLEEPING]  "sleep ",
   [RUNNABLE]  "runble",
-  [RUNNING]   "run",
+  [RUNNING]   "run   ",
   [ZOMBIE]    "zombie"
   };
   struct proc *p;
   char *state;
-  int ppid, pid;
-  uint xticks;
+  int ppid;
+  uint etime = 0;
 
-  printf("\n");
   for(p = proc; p < &proc[NPROC]; p++){
+
     acquire(&p->lock);
-    if(p->state == UNUSED) {
+
+    if(p->state == UNUSED)
+    {
       release(&p->lock);
       continue;
     }
+
     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+    {
       state = states[p->state];
+      if(p->state == ZOMBIE)
+        etime = p->etime - p->stime;
+      else
+      if(p->stime == -1)
+        etime = 0;
+      else
+      {
+        acquire(&tickslock);
+        etime = ticks - p->stime;
+        release(&tickslock);
+      }
+    }
     else
       state = "???";
 
-    pid = p->pid;
-    release(&p->lock);
     acquire(&wait_lock);
-    if (p->parent) {
-       acquire(&p->parent->lock);
-       ppid = p->parent->pid;
-       release(&p->parent->lock);
+    if(p->parent){
+      acquire(&p->parent->lock);
+      ppid = p->parent->pid;
+      release(&p->parent->lock);
     }
-    else ppid = -1;
+    else
+      ppid = -1;
     release(&wait_lock);
 
-    acquire(&tickslock);
-    xticks = ticks;
-    release(&tickslock);
-
-    printf("pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p", pid, ppid, state, p->name, p->ctime, p->stime, (p->endtime == -1) ? xticks-p->stime : p->endtime-p->stime, p->sz);
+    printf("pid=%d, ppid=%d, state=%s, cmd=%s, ctime=%d, stime=%d, etime=%d, size=%p", p->pid, ppid, state, p->name, p->ctime, p->stime, etime, p->sz);
     printf("\n");
+
+    release(&p->lock);
   }
-  return 0;
 }
 
 int
 pinfo(int pid, uint64 addr)
 {
-   struct procstat pstat;
-
-   static char *states[] = {
+  static char *states[] = {
   [UNUSED]    "unused",
-  [SLEEPING]  "sleep",
+  [SLEEPING]  "sleep ",
   [RUNNABLE]  "runble",
-  [RUNNING]   "run",
+  [RUNNING]   "run   ",
   [ZOMBIE]    "zombie"
   };
   struct proc *p;
+  struct proc *mp = myproc();
   char *state;
-  uint xticks;
-  int found=0;
+  int ppid;
+  uint etime = 0;
 
-  if (pid == -1) {
-     p = myproc();
-     acquire(&p->lock);
-     found=1;
-  }
-  else {
-     for(p = proc; p < &proc[NPROC]; p++){
-       acquire(&p->lock);
-       if((p->state == UNUSED) || (p->pid != pid)) {
-         release(&p->lock);
-         continue;
-       }
-       else {
-         found=1;
-         break;
-       }
-     }
-  }
-  if (found) {
-     if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
-         state = states[p->state];
-     else
-         state = "???";
+  if(pid == -1)
+    pid = mp->pid;
 
-     pstat.pid = p->pid;
-     release(&p->lock);
-     acquire(&wait_lock);
-     if (p->parent) {
-        acquire(&p->parent->lock);
-        pstat.ppid = p->parent->pid;
-        release(&p->parent->lock);
-     }
-     else pstat.ppid = -1;
-     release(&wait_lock);
+  for(p = proc; p < &proc[NPROC]; p++){
 
-     acquire(&tickslock);
-     xticks = ticks;
-     release(&tickslock);
-
-     safestrcpy(&pstat.state[0], state, strlen(state)+1);
-     safestrcpy(&pstat.command[0], &p->name[0], sizeof(p->name));
-     pstat.ctime = p->ctime;
-     pstat.stime = p->stime;
-     pstat.etime = (p->endtime == -1) ? xticks-p->stime : p->endtime-p->stime;
-     pstat.size = p->sz;
-     if(copyout(myproc()->pagetable, addr, (char *)&pstat, sizeof(pstat)) < 0) return -1;
-     return 0;
-  }
-  else return -1;
-}
-
-int
-schedpolicy(int x)
-{
-   int y = sched_policy;
-   sched_policy = x;
-   return y;
-}
-
-struct buffer buf_arr[NUM_BUFFER];
-struct sleeplock insert_lock;
-struct sleeplock delete_lock;
-
-void
-bufferinit() {
-    initsleeplock(&insert_lock, "insert-lock");
-    initsleeplock(&delete_lock, "delete-lock");
-
-    for(int i = 0; i < NUM_BUFFER; i++) {
-        struct buffer* buff = &buf_arr[i];
-        initsleeplock(&buff->lock, "buffer-lock");
-        buff->value = -1;
-        buff->full = 0;
-        buff->inserted = 0;
-        buff->deleted = 0;
-    }
-}
-
-struct barr barriers[NUM_BARRIER];
-
-void
-barrinit() {
-    for(int i=0; i<NUM_BARRIER; i++) {
-        (&barriers[i])->set = 0;
-    }
-}
-
-void
-barrier(int inst_num, int id, int np) {
-    struct proc* p = myproc();
-    int pid;
     acquire(&p->lock);
-    pid = p->pid;
-    release(&p->lock);
-    struct barr *b = &barriers[id];
+    if(p->pid == pid){
 
-    acquiresleep(&b -> lock);
-    acquiresleep(&printlock);
-    printf("%d: Entered barrier#%d for barrier array id %d\n", pid, inst_num, id);
-    releasesleep(&printlock);
-    b->processes += 1;
-    if(b->processes < np) {
-        // while(b->processes < np)
-        cond_wait(&b->cv, &b->lock);
-    }
-    else {
-        cond_broadcast(&b->cv);
-        b->processes = 0;
-    }
-    acquiresleep(&printlock);
-    printf("%d: Finished barrier#%d for barrier array id %d\n", pid, inst_num, id);
-    releasesleep(&printlock);
-    releasesleep(&b->lock);
-}
+      if(p->state == UNUSED){
+        release(&p->lock);
+        continue;
+      }
 
-int
-barrier_alloc() {
-    for(int i = 0; i < NUM_BARRIER; i++) {
-        struct barr *b = &barriers[i];
-        if(b -> set == 0)
+      if(p->state >= 0 && p->state < NELEM(states) && states[p->state])
+      {
+        state = states[p->state];
+        if(p->state == ZOMBIE)
+          etime = p->etime - p->stime;
+        else
+        if(p->stime == -1)
+          etime = 0;
+        else
         {
-            b -> set = 1;
-            initsleeplock(&b -> lock, "barrier lock");
-            b -> cv = 1;
-            b -> processes = 0;
-            return i;
+          acquire(&tickslock);
+          etime = ticks - p->stime;
+          release(&tickslock);
         }
-    }
-    return -1;
-}
+      }
+      else
+        state = "???";
 
-int
-barrier_free(int id) {
-    struct barr *b = &barriers[id];
-    if(b->set == 0) 
+      acquire(&wait_lock);
+      if(p->parent){
+        acquire(&p->parent->lock);
+        ppid = p->parent->pid;
+        release(&p->parent->lock);
+      }
+      else
+        ppid = -1;
+      release(&wait_lock);
+
+      struct procstat pstat;
+      
+      pstat.pid = p->pid;
+      pstat.ppid = ppid;
+      pstat.ctime = p->ctime;
+      pstat.stime = p->stime;
+      pstat.etime = etime;
+      pstat.size = p->sz;
+      strncpy(pstat.state, state, 8);
+      strncpy(pstat.command, p->name, 16);
+
+      release(&p->lock);
+
+      if(addr == 0 || copyout(mp->pagetable, addr, (char *)&pstat, sizeof(struct procstat)) < 0)
+      {
         return -1;
-    b->set = 0;
-    return 0;
-}
+      }
 
-struct sem_buffer sem_buf_arr[NUM_SEM_BUFFER];
-struct sem_t pro;
-struct sem_t con;
-struct sem_t empty;
-struct sem_t full;
+      return 0;
+    }
+    release(&p->lock);
+  }
 
-void
-sembufferinit(){
-    sem_init(&pro,1);
-    sem_init(&con,1);
-    sem_init(&full,0);
-    sem_init(&empty,NUM_SEM_BUFFER);
-
-    for(int i=0;i < NUM_SEM_BUFFER; i++)
-        (sem_buf_arr[i]).value = -1;
+  return -1;
 }

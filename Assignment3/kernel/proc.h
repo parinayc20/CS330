@@ -88,10 +88,13 @@ struct proc {
 
   // p->lock must be held when using these:
   enum procstate state;        // Process state
-  void *chan;                    // If non-zero, sleeping on chan
+  void *chan;                  // If non-zero, sleeping on chan
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+  int base_priority;	       // Static base priority
+  int priority;		       // Dynamic priority of a process
+  int is_batchproc;	       // Is it part of a batch created using forkp
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -104,9 +107,17 @@ struct proc {
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)sleep(1);
+  char name[16];               // Process name (debugging)
 
-  uint ctime;
-  uint stime;
-  uint etime;
+  int ctime;		       // Creation time
+  int stime;		       // Execution start time
+  int endtime;		       // Execution end time
+
+  int waittime;		       // Wait time in ready queue
+  int waitstart;	       // Time when it enters ready queue
+
+  int burst_start;	       // Start of current CPU burst
+  int nextburst_estimate;      // s(n+1)
+
+  int cpu_usage;	       // CPU usage
 };

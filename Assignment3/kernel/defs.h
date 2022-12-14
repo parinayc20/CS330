@@ -1,4 +1,5 @@
-#include "procstat.h"
+#include "condvar.h"
+#include "semaphore.h"
 
 struct buf;
 struct context;
@@ -87,7 +88,6 @@ void            printfinit(void);
 int             cpuid(void);
 void            exit(int);
 int             fork(void);
-int             forkf(uint64);
 int             growproc(int);
 void            proc_mapstacks(pagetable_t);
 pagetable_t     proc_pagetable(struct proc *);
@@ -100,16 +100,27 @@ void            procinit(void);
 void            scheduler(void) __attribute__((noreturn));
 void            sched(void);
 void            sleep(void*, struct spinlock*);
+void            condsleep(cond_t*, struct sleeplock*);
 void            userinit(void);
 int             wait(uint64);
-int             waitpid(int, uint64);
 void            wakeup(void*);
+void            wakeupone(void*);
 void            yield(void);
 int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
 int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
 void            procdump(void);
-void            ps(void);
-int             pinfo(int, uint64 addr);
+int		forkf(uint64);
+int		waitpid(int, uint64);
+int		ps(void);
+int		pinfo(int, uint64);
+int		forkp(int);
+int		schedpolicy(int);
+void            bufferinit(void);
+void            barrinit(void);
+void            barrier(int,int,int);
+int             barrier_alloc(void);
+int             barrier_free(int);
+void            sembufferinit(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);
@@ -188,5 +199,20 @@ void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
 
+// condvar.c
+void            cond_wait(cond_t*, struct sleeplock*);
+void            cond_signal(cond_t*);
+void            cond_broadcast(cond_t*);
+
+// semaphore.c
+void sem_init(struct sem_t*,int);
+void sem_wait(struct sem_t*);
+void sem_post(struct sem_t*);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+
+
+extern struct sleeplock printlock;
+extern struct sleeplock dummy;

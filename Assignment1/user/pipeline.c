@@ -1,55 +1,99 @@
 #include "kernel/types.h"
+#include "kernel/stat.h"
 #include "user/user.h"
 
-int
-main(int argc, char *argv[])
+int 
+pipeline(int argc, char* argv[])
 {
-  int pipefd[2], x, y, n, i;
-
-  if (argc != 3) {
-     fprintf(2, "syntax: pipeline n x\nAborting...\n");
-     exit(0);
-  }
-  n = atoi(argv[1]);
-  if (n <= 0) {
-     fprintf(2, "Invalid input\nAborting...\n");
-     exit(0);
-  }
-  x = atoi(argv[2]);
-
-  x += getpid();
-  fprintf(1, "%d: %d\n", getpid(), x);
-
-  for (i=2; i<=n; i++) {
-     if (pipe(pipefd) < 0) {
-        fprintf(2, "Error: cannot create pipe\nAborting...\n");
-        exit(0);
-     }
-     if (write(pipefd[1], &x, sizeof(int)) < 0) {
-        fprintf(2, "Error: cannot write to pipe\nAborting...\n");
-        exit(0);
-     }
-     close(pipefd[1]);
-     y = fork();
-     if (y < 0) {
-        fprintf(2, "Error: cannot fork\nAborting...\n");
-	exit(0);
-     }
-     else if (y > 0) {
-	close(pipefd[0]);
-        wait(0);
-	break;
-     }
-     else {
-        if (read(pipefd[0], &x, sizeof(int)) < 0) {
-           fprintf(2, "Error: cannot read from pipe\nAborting...\n");
-           exit(0);
+    if(argc != 3)
+    {
+        fprintf(2, "Usage : pipeline n x\n");
+        exit(1);
+    }
+    int sign = 1;
+    int i = 0;
+    while(argv[1][i] != '\0') 
+    {
+        if(argv[1][i] < '0' || argv[1][i] > '9')
+        {
+            fprintf(2, "n must be a positive integer\n");
+            exit(1);
         }
-	x += getpid();
-	fprintf(1, "%d: %d\n", getpid(), x);
-	close(pipefd[0]);
-     }
-  }
+        i++;
+    }
+    if(atoi(argv[1]) <= 0)
+    {
+        fprintf(2, "n must be a positive integer\n");
+        exit(1);
+    }
 
-  exit(0);
+    if(!((argv[2][0] >= '0' && argv[2][0] <= '9') ||  argv[2][0] == '-'))
+    {
+        fprintf(2, "x should be a integer\n");
+        exit(1);
+    }
+    if(argv[2][0]=='-')
+    {
+        sign = -1;
+    }
+    i = 1;
+    while(argv[2][i] != '\0') 
+    {
+        if(argv[2][i] < '0' || argv[2][i] > '9')
+        {
+            fprintf(2, "x should be a integer\n");
+            exit(1);
+        }
+        i++;
+    }
+
+    int n = atoi(argv[1]);
+    int x;
+    if(sign==1)
+        x = atoi(argv[2]);
+    else 
+        x = -1*atoi(argv[2]+1);
+    int ret_val = 0;
+    int pipefd[2];
+
+    while(1) {
+        n--;
+        if(n == -1)
+            break;
+
+        if(pipe(pipefd) < 0)
+        {
+            fprintf(2, "Pipe could not be created. Aborting ... \n");
+            exit(1);
+        }
+
+        int f = fork();
+        if(f < 0){
+            fprintf(2, "Error: cannot fork. Aborting...\n");
+		    exit(1);
+        }
+        else
+        if(f == 0) {
+            if (read(pipefd[0], &x, sizeof(int)) < 0) {
+                fprintf(2, "Error: cannot read. Aborting...\n");
+                exit(1);
+            }
+            close(pipefd[0]);
+            close(pipefd[1]);
+        }
+        else {
+            x += getpid();
+            fprintf(1, "%d : %d\n", getpid(), x);
+            if (write(pipefd[1], &x, sizeof(int)) < 0) {
+                fprintf(2, "Error: cannot write. Aborting...\n");
+                exit(1);
+            }
+            close(pipefd[1]);
+            close(pipefd[0]);
+            wait(&ret_val);
+            exit(ret_val);
+        }
+    }
+
+    exit(0);
 }

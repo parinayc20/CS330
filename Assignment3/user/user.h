@@ -1,7 +1,6 @@
-#include "kernel/procstat.h"
-
 struct stat;
 struct rtcdate;
+struct procstat;
 
 // system calls
 int fork(void);
@@ -22,16 +21,19 @@ int mkdir(const char*);
 int chdir(const char*);
 int dup(int);
 int getpid(void);
-int getppid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
-void yield(void);
-uint64 getpa(int*);
-int forkf(int (*)(void));
+
+int getppid(void);
+int yield(void);
+uint64 getpa(void*);
+int forkf(void*);
 int waitpid(int, int*);
 int ps(void);
-int pinfo(int, struct procstat *);
+int pinfo(int, struct procstat*);
+int forkp(int);
+int schedpolicy(int);
 
 // ulib.c
 int stat(const char*, struct stat*);
@@ -49,3 +51,15 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+
+int barrier_alloc(void);
+void barrier(int, int, int);
+void barrier_free(int);
+
+void buffer_cond_init(void);
+void cond_produce(int);
+int cond_consume(void);
+
+void buffer_sem_init(void);
+void sem_produce(int);
+int sem_consume(void);

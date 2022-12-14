@@ -6,8 +6,6 @@
 
 volatile static int started = 0;
 
-extern int sched_policy;
-
 // start() jumps here in supervisor mode on all CPUs.
 void
 main()
@@ -31,9 +29,6 @@ main()
     fileinit();      // file table
     virtio_disk_init(); // emulated hard disk
     userinit();      // first user process
-    barrinit();
-    initsleeplock(&printlock, "print-lock");
-    initsleeplock(&dummy, "dummy-lock");
     __sync_synchronize();
     started = 1;
   } else {
@@ -45,8 +40,6 @@ main()
     trapinithart();   // install kernel trap vector
     plicinithart();   // ask PLIC for device interrupts
   }
-
-  sched_policy = SCHED_PREEMPT_RR;
 
   scheduler();        
 }
